@@ -12,11 +12,12 @@ import { chart } from "./memory";
 dotenv.config();
 
 export const app = new Hono();
+
 app.use(
   cors({
     origin: "http://localhost:3000",
     credentials: true,
-  })
+  }),
 );
 
 const limiter = rateLimiter({
@@ -101,4 +102,7 @@ export async function sendOrderbook() {
   }
 }
 
-export default app;
+export default {
+  port: process.env.PORT,
+  fetch: app.fetch,
+};

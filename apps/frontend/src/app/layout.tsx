@@ -1,11 +1,16 @@
-import type { Metadata } from "next";
-import { TrendingUp } from "lucide-react";
+import { Geist } from "next/font/google";
 import { Toaster } from "sonner";
 import "./globals.css";
 import Providers from "@/components/provider";
 import { Nav } from "@/components/Navbar";
+import { cn } from "@/lib/utils";
 
-export const metadata: Metadata = {
+const geist = Geist({
+  weight: "variable",
+  subsets: ["latin"],
+});
+
+export const metadata = {
   title: "TradeX",
   description: "Trading System",
 };
@@ -17,7 +22,12 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className="dark">
-      <body className="min-h-screen max-w-7xl border mx-auto bg-background text-foreground">
+      <body
+        className={cn(
+          "min-h-screen max-w-7xl border mx-auto bg-background text-foreground",
+          geist.className,
+        )}
+      >
         <Providers>
           <Nav />
           {children}
