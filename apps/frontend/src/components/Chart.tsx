@@ -2,14 +2,17 @@
 
 import { useEffect, useRef } from "react";
 import { createChart, CandlestickData, IChartApi, ISeriesApi } from "lightweight-charts";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { Loader2 } from "lucide-react";
+import { useSocket } from "@/hooks/useSocket";
 
 export default function Chart() {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
+  const queryClient = useQueryClient();
+  const socket = useSocket();
 
   const { data, isPending } = useQuery({
     queryKey: ["chart"],
@@ -17,6 +20,25 @@ export default function Chart() {
     refetchOnWindowFocus: true,
     refetchInterval: 5 * 60 * 60 * 1000,
   });
+
+  useEffect(() => {
+    if (!socket) {
+      return;
+    }
+
+    const handleChart = (payload: CandlestickData[]) => {
+      if (!payload || payload.length === 0) {
+        return;
+      }
+      queryClient.setQueryData(["chart"], payload);
+    };
+
+    socket.on("chart", handleChart);
+
+    return () => {
+      socket.off("chart", handleChart);
+    };
+  }, [queryClient, socket]);
 
   useEffect(() => {
     if (!chartContainerRef.current || chartRef.current) {

@@ -52,9 +52,26 @@ export default function Auth() {
 
     return (
       <div className="flex items-center gap-2">
-        <Button variant="ghost" asChild>
-          <Link href="/dashboard">Dashboard</Link>
-        </Button>
+        <div className="flex items-center gap-4 text-sm font-medium text-muted-foreground">
+          <Link
+            href="/dashboard"
+            className="hover:text-foreground transition-colors"
+          >
+            Dashboard
+          </Link>
+          <Link
+            href="/trade"
+            className="hover:text-foreground transition-colors"
+          >
+            Trade
+          </Link>
+          <Link
+            href="/order"
+            className="hover:text-foreground transition-colors"
+          >
+            Orders
+          </Link>
+        </div>
         <Button variant="outline" onClick={handleSignOut} disabled={isPending}>
           {isPending && <Loader2 className="w-5 h-5 animate-spin" />}
           Sign Out
@@ -73,9 +90,26 @@ export default function Auth() {
 
   return (
     <div className="flex items-center gap-2">
-      <Button variant="ghost" asChild>
-        <Link href="/dashboard">Dashboard</Link>
-      </Button>
+      <div className="flex items-center gap-4 text-sm font-medium text-muted-foreground px-6">
+        <Link
+          href="/dashboard"
+          className="hover:text-foreground transition-colors"
+        >
+          Dashboard
+        </Link>
+        <Link href="/trade" className="hover:text-foreground transition-colors">
+          Trade
+        </Link>
+        <Link href="/order" className="hover:text-foreground transition-colors">
+          Orders
+        </Link>
+        <Link
+          href="/transactions"
+          className="text-muted-foreground hover:text-foreground transition-colors"
+        >
+          Transactions
+        </Link>
+      </div>
       <Button variant="outline" onClick={handleSignOut} disabled={isPending}>
         {isPending && <Loader2 className="w-5 h-5 animate-spin" />}
         Sign Out

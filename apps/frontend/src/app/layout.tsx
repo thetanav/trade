@@ -4,6 +4,7 @@ import "./globals.css";
 import Providers from "@/components/provider";
 import { Nav } from "@/components/Navbar";
 import { cn } from "@/lib/utils";
+import NextTopLoader from "nextjs-toploader";
 
 const geist = Geist({
   weight: "variable",
@@ -28,6 +29,7 @@ export default function RootLayout({
           geist.className,
         )}
       >
+        <NextTopLoader />
         <Providers>
           <Nav />
           {children}

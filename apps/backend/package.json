@@ -12,12 +12,13 @@
     "db:push": "bunx --bun drizzle-kit push",
     "db:studio": "bunx --bun drizzle-kit studio",
     "db:gen": "bunx drizzle-kit generate",
-    "db:migrate": "bunx drizzle-kit migrate",
+    "db:migrate": "bunx drizzle-kit migrate"
   },
   "keywords": [],
   "author": "tanav",
   "license": "ISC",
   "dependencies": {
+    "@hono/node-server": "^2.0.1",
     "bcryptjs": "^3.0.2",
     "dotenv": "^16.6.0",
     "drizzle-orm": "^0.44.2",
@@ -27,6 +28,7 @@
     "pg": "^8.16.3",
     "postgres": "^3.4.7",
     "redis": "^5.5.6",
+    "socket.io": "^4.8.3",
     "ws": "^8.18.2",
     "zod": "^4.1.12"
   },

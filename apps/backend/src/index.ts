@@ -6,8 +6,11 @@ import authRoutes from "./routes/auth";
 import userRoutes from "./routes/user";
 import tradeRoutes from "./routes/trade";
 import { Hono } from "hono";
-import { updateChart } from "./utils/chart";
+import { updateChart, setChartBroadcast } from "./utils/chart";
 import { chart } from "./memory";
+import { createServer } from "http";
+import { Server as SocketIOServer } from "socket.io";
+import { serve } from "@hono/node-server";
 
 dotenv.config();
 
@@ -34,6 +37,14 @@ const limiter = rateLimiter({
 const clients = new Set<{
   res: any; // TODO: update for Hono
 }>();
+
+const httpServer = createServer();
+const io = new SocketIOServer(httpServer, {
+  cors: {
+    origin: "http://localhost:3000",
+    credentials: true,
+  },
+});
 
 // API Routes
 app.route("/trade", tradeRoutes);
@@ -80,19 +91,17 @@ export async function sendOrderbook() {
   try {
     const asks = await redisClient.lRange("asks", 0, -1);
     const bids = await redisClient.lRange("bids", 0, -1);
-    const orderbook = JSON.stringify({
-      type: "orderbook",
-      data: {
-        asks: asks.map((a) => {
-          const parsed = JSON.parse(a);
-          return { price: parsed.price, quantity: parsed.quantity };
-        }),
-        bids: bids.map((b) => {
-          const parsed = JSON.parse(b);
-          return { price: parsed.price, quantity: parsed.quantity };
-        }),
-      },
-    });
+    const orderbook = {
+      asks: asks.map((a) => {
+        const parsed = JSON.parse(a);
+        return { price: parsed.price, quantity: parsed.quantity };
+      }),
+      bids: bids.map((b) => {
+        const parsed = JSON.parse(b);
+        return { price: parsed.price, quantity: parsed.quantity };
+      }),
+    };
+    io.emit("depth", orderbook);
     for (const client of clients) {
       client.res.write(`event: orderbook\n`);
       client.res.write(`data: ${JSON.stringify(orderbook)}\n\n`);
@@ -102,7 +111,60 @@ export async function sendOrderbook() {
   }
 }
 
-export default {
-  port: process.env.PORT,
+io.on("connection", (socket) => {
+  const seedDepth = async () => {
+    try {
+      const asks = await redisClient.lRange("asks", 0, -1);
+      const bids = await redisClient.lRange("bids", 0, -1);
+      socket.emit("depth", {
+        asks: asks.map((a) => {
+          const parsed = JSON.parse(a);
+          return { price: parsed.price, quantity: parsed.quantity };
+        }),
+        bids: bids.map((b) => {
+          const parsed = JSON.parse(b);
+          return { price: parsed.price, quantity: parsed.quantity };
+        }),
+      });
+    } catch (err) {
+      console.error("Failed to seed depth", err);
+    }
+  };
+
+  const seedChart = () => {
+    socket.emit(
+      "chart",
+      chart.slice(-720).map((c) => ({
+        time: Math.floor(c.timestamp.getTime() / 1000),
+        open: c.open,
+        high: c.high,
+        low: c.low,
+        close: c.close,
+      })),
+    );
+  };
+
+  seedDepth();
+  seedChart();
+});
+
+setChartBroadcast((payload) => {
+  io.emit(
+    "chart",
+    payload.slice(-720).map((c) => ({
+      time: Math.floor(c.timestamp.getTime() / 1000),
+      open: c.open,
+      high: c.high,
+      low: c.low,
+      close: c.close,
+    })),
+  );
+});
+
+const port = Number(process.env.PORT) || 8080;
+
+serve({
   fetch: app.fetch,
-};
+  createServer: () => httpServer,
+  port,
+});
