@@ -13,14 +13,15 @@ import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
 import { Button } from "../../components/ui/button";
 import { useState } from "react";
-import axios from "axios";
 import { toast } from "sonner";
 import { useMutation } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { Loader2 } from "lucide-react";
+import { useAuthStore } from "@/store/auth";
 
 export default function Login() {
   const router = useRouter();
+  const { setToken, setAuthenticated } = useAuthStore();
   const [formData, setFormData] = useState({
     email: "",
     password: "",
@@ -38,6 +39,8 @@ export default function Login() {
         return;
       }
       localStorage.setItem("token", data.token);
+      setToken(data.token);
+      setAuthenticated(true);
       toast.success(data.msg);
       router.push("/dashboard");
     },

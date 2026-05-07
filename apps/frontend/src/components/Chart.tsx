@@ -1,17 +1,15 @@
 "use client";
 
-import axios from "axios";
-import { useEffect, useRef, useState } from "react";
-import { createChart, CandlestickData } from "lightweight-charts";
+import { useEffect, useRef } from "react";
+import { createChart, CandlestickData, IChartApi, ISeriesApi } from "lightweight-charts";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { Loader2 } from "lucide-react";
 
-const apiURL = process.env.NEXT_PUBLIC_BACKEND_URL;
-
 export default function Chart() {
   const chartContainerRef = useRef<HTMLDivElement>(null);
-  const chartRef = useRef<any>(null);
+  const chartRef = useRef<IChartApi | null>(null);
+  const seriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
 
   const { data, isPending } = useQuery({
     queryKey: ["chart"],
@@ -21,43 +19,53 @@ export default function Chart() {
   });
 
   useEffect(() => {
-    if (chartContainerRef.current && data && data.length > 0) {
-      if (chartRef.current) {
-        chartRef.current.remove();
-      }
-      const chart = createChart(chartContainerRef.current, {
-        width: chartContainerRef.current.clientWidth,
-        height: chartContainerRef.current.clientHeight,
-        layout: {
-          background: { color: "#000000" },
-          textColor: "#eee",
-        },
-        grid: {
-          vertLines: { color: "#545454" },
-          horzLines: { color: "#545454" },
-        },
-        timeScale: {
-          timeVisible: true,
-          secondsVisible: false,
-        },
-      });
-
-      const candlestickSeries = (chart as any).addCandlestickSeries();
-      candlestickSeries.setData(data);
-
-      chartRef.current = chart;
-
-      const handleResize = () => {
-        chart.applyOptions({ width: chartContainerRef.current!.clientWidth });
-      };
-
-      window.addEventListener("resize", handleResize);
-
-      return () => {
-        window.removeEventListener("resize", handleResize);
-        chart.remove();
-      };
+    if (!chartContainerRef.current || chartRef.current) {
+      return;
     }
+
+    const chart = createChart(chartContainerRef.current, {
+      width: chartContainerRef.current.clientWidth,
+      height: chartContainerRef.current.clientHeight,
+      layout: {
+        background: { color: "#000000" },
+        textColor: "#eee",
+      },
+      grid: {
+        vertLines: { color: "#545454" },
+        horzLines: { color: "#545454" },
+      },
+      timeScale: {
+        timeVisible: true,
+        secondsVisible: false,
+      },
+    });
+
+    const candlestickSeries = chart.addCandlestickSeries();
+    chartRef.current = chart;
+    seriesRef.current = candlestickSeries;
+
+    const handleResize = () => {
+      if (!chartContainerRef.current) {
+        return;
+      }
+      chart.applyOptions({ width: chartContainerRef.current.clientWidth });
+    };
+
+    window.addEventListener("resize", handleResize);
+
+    return () => {
+      window.removeEventListener("resize", handleResize);
+      chart.remove();
+      chartRef.current = null;
+      seriesRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!seriesRef.current || !data || data.length === 0) {
+      return;
+    }
+    seriesRef.current.setData(data);
   }, [data]);
 
   const lastPrice =

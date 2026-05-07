@@ -5,14 +5,14 @@
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc -b",
-    "generate": "bunx drizzle-kit generate",
-    "migrate": "bunx drizzle-kit migrate",
     "init-db": "bun run scripts/init-db.js",
     "start": "bun dist/index.js",
     "start:pm2": "pm2 start ecosystem.config.js",
     "dev": "bun --watch src/index.ts",
     "db:push": "bunx --bun drizzle-kit push",
-    "db:studio": "bunx --bun drizzle-kit studio"
+    "db:studio": "bunx --bun drizzle-kit studio",
+    "db:gen": "bunx drizzle-kit generate",
+    "db:migrate": "bunx drizzle-kit migrate",
   },
   "keywords": [],
   "author": "tanav",
