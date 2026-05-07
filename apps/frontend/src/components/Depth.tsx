@@ -1,12 +1,15 @@
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import { Card, CardContent, CardHeader } from "./ui/card";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { Orderbook } from "@/types";
+import { useSocket } from "@/hooks/useSocket";
 
 const Depth = () => {
+  const queryClient = useQueryClient();
+  const socket = useSocket();
   const { data: orderBook } = useQuery({
     queryKey: ["depth"],
     queryFn: async () => {
@@ -15,6 +18,25 @@ const Depth = () => {
     },
     refetchInterval: 5000,
   });
+
+  useEffect(() => {
+    if (!socket) {
+      return;
+    }
+
+    const handleDepth = (payload: Orderbook) => {
+      if (!payload) {
+        return;
+      }
+      queryClient.setQueryData(["depth"], payload);
+    };
+
+    socket.on("depth", handleDepth);
+
+    return () => {
+      socket.off("depth", handleDepth);
+    };
+  }, [queryClient, socket]);
 
   // Top 6 levels per side
   const topBids = useMemo(

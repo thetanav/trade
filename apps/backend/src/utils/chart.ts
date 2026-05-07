@@ -1,6 +1,14 @@
 import { Chart } from "../types";
 
 // TODO: fix it
+type ChartBroadcast = (payload: Chart[]) => void;
+
+let broadcastLatest: ChartBroadcast | null = null;
+
+export function setChartBroadcast(fn: ChartBroadcast | null) {
+  broadcastLatest = fn;
+}
+
 export async function updateChart(chart: Chart[], redisClient: any) {
   console.log("> updating chart...");
   let currentMinutePrices: number[] = [];
@@ -22,13 +30,17 @@ export async function updateChart(chart: Chart[], redisClient: any) {
           const close = currentMinutePrices[currentMinutePrices.length - 1];
           const high = Math.max(...currentMinutePrices);
           const low = Math.min(...currentMinutePrices);
-          chart.push({
+          const candle: Chart = {
             open,
             high,
             low,
             close,
             timestamp: new Date(lastMinute),
-          });
+          };
+          chart.push(candle);
+          if (broadcastLatest) {
+            broadcastLatest(chart);
+          }
           console.log("> added candle to chart");
         }
         currentMinutePrices = [];
