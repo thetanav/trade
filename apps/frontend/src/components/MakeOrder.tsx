@@ -64,7 +64,7 @@ const MakeOrder = () => {
   };
 
   return (
-    <Card className="shadow-md border-0">
+    <Card className="rounded-lg">
       <CardHeader>
         <CardTitle className="text-lg font-semibold">Place Order</CardTitle>
       </CardHeader>
