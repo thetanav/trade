@@ -7,14 +7,20 @@ import { api } from "@/lib/api";
 import { Orderbook } from "@/types";
 import { useSocket } from "@/hooks/useSocket";
 
+type DepthResponse = {
+  ok: boolean;
+  data?: Orderbook;
+  error?: string;
+};
+
 const Depth = () => {
   const queryClient = useQueryClient();
   const socket = useSocket();
   const { data: orderBook } = useQuery({
     queryKey: ["depth"],
     queryFn: async () => {
-      const res: any = await api("/trade/depth");
-      return res?.data! as Orderbook;
+      const res = await api<DepthResponse>("/trade/depth");
+      return res.data ?? { asks: [], bids: [] };
     },
     refetchInterval: 5000,
   });

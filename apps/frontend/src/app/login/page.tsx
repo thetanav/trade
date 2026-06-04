@@ -19,21 +19,32 @@ import { api } from "@/lib/api";
 import { Loader2 } from "lucide-react";
 import { useAuthStore } from "@/store/auth";
 
+type LoginForm = {
+  email: string;
+  password: string;
+};
+
+type AuthResponse = {
+  ok: boolean;
+  msg: string;
+  token: string;
+};
+
 export default function Login() {
   const router = useRouter();
   const { setToken, setAuthenticated } = useAuthStore();
-  const [formData, setFormData] = useState({
+  const [formData, setFormData] = useState<LoginForm>({
     email: "",
     password: "",
   });
 
   const { isPending, mutate } = useMutation({
-    mutationFn: async (data: any) =>
-      await api("/auth/login", {
+    mutationFn: async (data: LoginForm) =>
+      await api<AuthResponse>("/auth/login", {
         method: "POST",
         body: JSON.stringify(data),
       }),
-    onSuccess: (data: any) => {
+    onSuccess: (data) => {
       if (!data.ok) {
         toast.error(data.msg);
         return;
@@ -93,7 +104,7 @@ export default function Login() {
         </CardContent>
         <CardFooter className="text-center">
           <p className="text-sm text-gray-600 dark:text-gray-400">
-            Don't have an account?{" "}
+            Don&apos;t have an account?{" "}
             <Link href="/signup" className="text-blue-600 hover:underline">
               Sign up
             </Link>

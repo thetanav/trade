@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader } from "./ui/card";
 import { Button } from "./ui/button";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
+import Image from "next/image";
 
 const Profile = () => {
   const { data, isLoading, refetch, isFetching } = useQuery({
@@ -41,9 +42,11 @@ const Profile = () => {
       <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4">
         <div className="flex items-center gap-3">
           <div className="w-12 h-12 rounded-full bg-gradient-to-br from-primary/20 to-primary/5 flex items-center justify-center shrink-0 overflow-hidden ring-2 ring-primary/20">
-            <img
+            <Image
               src={"https://avatar.vercel.sh/" + data.name}
               alt="avatar"
+              width={48}
+              height={48}
               draggable={false}
               className="w-full h-full rounded-full select-none"
             />

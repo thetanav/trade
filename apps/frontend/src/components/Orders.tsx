@@ -21,6 +21,12 @@ type OrdersResponse = {
   };
 };
 
+type CancelOrderResponse = {
+  ok: boolean;
+  msg?: string;
+  error?: string;
+};
+
 export default function Orders() {
   const queryClient = useQueryClient();
   const { data, isLoading, refetch } = useQuery<OrdersResponse>({
@@ -32,11 +38,11 @@ export default function Orders() {
 
   const cancelOrder = useMutation({
     mutationFn: async ({ orderId, side }: { orderId: string; side: string }) =>
-      await api("/trade/cancelorder", {
+      await api<CancelOrderResponse>("/trade/cancelorder", {
         method: "POST",
         body: JSON.stringify({ orderId, side }),
       }),
-    onSuccess: (data: any) => {
+    onSuccess: (data) => {
       if (data.ok) {
         toast.success("Order cancelled successfully!");
         queryClient.invalidateQueries({ queryKey: ["myorders"] });

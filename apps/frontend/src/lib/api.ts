@@ -11,6 +11,5 @@ export async function api<T>(
     },
   });
   const data = await res.json();
-  console.log(data);
   return data;
 }

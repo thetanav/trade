@@ -18,6 +18,11 @@ type FormData = {
   market: boolean;
 };
 
+type MakeOrderResponse = {
+  ok: boolean;
+  msg: string;
+};
+
 const MakeOrder = () => {
   const [formData, setFormData] = useState<FormData>({
     side: "bid",
@@ -28,7 +33,7 @@ const MakeOrder = () => {
 
   const { isPending, mutate } = useMutation({
     mutationFn: async (data: FormData) =>
-      await api("/trade/makeorder", {
+      await api<MakeOrderResponse>("/trade/makeorder", {
         method: "POST",
         body: JSON.stringify({
           side: data.side,
@@ -37,7 +42,7 @@ const MakeOrder = () => {
           market: data.market,
         }),
       }),
-    onSuccess: (data: any) => {
+    onSuccess: (data) => {
       if (data.ok) {
         toast.success(data.msg || "Order submitted successfully!");
         setFormData((prev) => ({ ...prev, price: "", quantity: "" }));

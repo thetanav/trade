@@ -18,9 +18,22 @@ import { useMutation } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { Loader2 } from "lucide-react";
 
+type SignupForm = {
+  name: string;
+  email: string;
+  password: string;
+  confirmPassword: string;
+};
+
+type SignupResponse = {
+  ok: boolean;
+  msg: string;
+  token?: string;
+};
+
 export default function Signup() {
   const router = useRouter();
-  const [formData, setFormData] = useState({
+  const [formData, setFormData] = useState<SignupForm>({
     name: "",
     email: "",
     password: "",
@@ -28,17 +41,21 @@ export default function Signup() {
   });
 
   const { isPending, mutate } = useMutation({
-    mutationFn: async (data: any) =>
-      await api("/auth/signup", {
+    mutationFn: async (data: SignupForm) =>
+      await api<SignupResponse>("/auth/signup", {
         method: "POST",
         body: JSON.stringify(data),
       }),
-    onSuccess: (data: any) => {
+    onSuccess: (data) => {
+      if (!data.ok) {
+        toast.error(data.msg);
+        return;
+      }
       toast.success(data.msg);
       router.push("/login");
     },
-    onError: (data: any) => {
-      toast.error(data.msg);
+    onError: () => {
+      toast.error("Unable to create account. Please try again.");
     },
   });
 
