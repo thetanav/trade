@@ -10,14 +10,17 @@ export interface User {
 }
 
 export interface Order {
-  userId: string;
+  orderId: string;
+  userId: number;
+  symbol: string;
   price: number;
   quantity: number;
+  timestamp: number;
 }
 
 export interface AnonyOrder {
   price: number;
-  size: number;
+  quantity: number;
 }
 
 export interface Orderbook {
@@ -31,4 +34,14 @@ export interface Chart {
   high: number;
   close: number;
   low: number;
+}
+
+export interface PortfolioEntry {
+  symbol: string;
+  quantity: number;
+}
+
+export interface SymbolInfo {
+  symbol: string;
+  name: string;
 }

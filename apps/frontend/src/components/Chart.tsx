@@ -1,22 +1,32 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { createChart, CandlestickData, IChartApi, ISeriesApi } from "lightweight-charts";
+import {
+  createChart,
+  CandlestickData,
+  IChartApi,
+  ISeriesApi,
+} from "lightweight-charts";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { Loader2 } from "lucide-react";
 import { useSocket } from "@/hooks/useSocket";
 
-export default function Chart() {
+interface Props {
+  symbol: string;
+}
+
+export default function Chart({ symbol }: Props) {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const queryClient = useQueryClient();
-  const socket = useSocket();
+  const socket = useSocket(symbol);
 
   const { data, isPending } = useQuery({
-    queryKey: ["chart"],
-    queryFn: async () => await api<CandlestickData[]>("/trade/chart"),
+    queryKey: ["chart", symbol],
+    queryFn: async () =>
+      await api<CandlestickData[]>(`/trade/chart?symbol=${symbol}`),
     refetchOnWindowFocus: true,
     refetchInterval: 5 * 60 * 60 * 1000,
   });
@@ -30,7 +40,7 @@ export default function Chart() {
       if (!payload || payload.length === 0) {
         return;
       }
-      queryClient.setQueryData(["chart"], payload);
+      queryClient.setQueryData(["chart", symbol], payload);
     };
 
     socket.on("chart", handleChart);
@@ -38,7 +48,7 @@ export default function Chart() {
     return () => {
       socket.off("chart", handleChart);
     };
-  }, [queryClient, socket]);
+  }, [queryClient, socket, symbol]);
 
   useEffect(() => {
     if (!chartContainerRef.current || chartRef.current) {
@@ -81,7 +91,7 @@ export default function Chart() {
       chartRef.current = null;
       seriesRef.current = null;
     };
-  }, []);
+  }, [symbol]);
 
   useEffect(() => {
     if (!seriesRef.current || !data || data.length === 0) {
@@ -97,11 +107,13 @@ export default function Chart() {
     <div className="">
       <div className="flex items-center justify-between mb-4 mx-4">
         <div>
-          <h3 className="text-2xl font-bold">TNV</h3>
+          <h3 className="text-2xl font-bold">{symbol}</h3>
         </div>
         <div className="flex items-center gap-3">
           {isPending && <Loader2 className="w-5 h-5 animate-spin" />}
-          <p className="text-2xl font-bold text-green-400">${lastPrice}</p>
+          <p className="text-2xl font-bold text-green-400">
+            ${typeof lastPrice === "number" ? lastPrice.toFixed(2) : lastPrice}
+          </p>
         </div>
       </div>
       <div

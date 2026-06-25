@@ -23,7 +23,11 @@ type MakeOrderResponse = {
   msg: string;
 };
 
-const MakeOrder = () => {
+interface Props {
+  symbol: string;
+}
+
+const MakeOrder = ({ symbol }: Props) => {
   const [formData, setFormData] = useState<FormData>({
     side: "bid",
     price: "",
@@ -32,11 +36,12 @@ const MakeOrder = () => {
   });
 
   const { isPending, mutate } = useMutation({
-    mutationFn: async (data: FormData) =>
+    mutationFn: async (data: FormData & { sym: string }) =>
       await api<MakeOrderResponse>("/trade/makeorder", {
         method: "POST",
         body: JSON.stringify({
           side: data.side,
+          symbol: data.sym,
           price: Number(data.price),
           quantity: Number(data.quantity),
           market: data.market,
@@ -65,7 +70,7 @@ const MakeOrder = () => {
       toast.error("Price and quantity are required for limit orders.");
       return;
     }
-    mutate(formData);
+    mutate({ ...formData, sym: symbol });
   };
 
   return (

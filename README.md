@@ -93,6 +93,8 @@ bun run dev          # Start all apps through Turborepo
 bun run build        # Build all workspaces
 bun run lint         # Run lint checks
 bun run check-types  # Run TypeScript checks
+
+docker run -d --name redis -p 6379:6379 redis:latest # spin docker
 ```
 
 Backend-specific commands:

@@ -4,7 +4,13 @@ export interface User {
   email: string;
   stock: number;
   cash: number;
+  portfolio: PortfolioEntry[];
   createdAt?: string;
+}
+
+export interface PortfolioEntry {
+  symbol: string;
+  quantity: number;
 }
 
 export interface Order {
@@ -19,6 +25,7 @@ export interface AnonyOrder {
 }
 
 export interface Orderbook {
+  symbol: string;
   asks: AnonyOrder[];
   bids: AnonyOrder[];
 }
@@ -26,8 +33,15 @@ export interface Orderbook {
 export interface Transaction {
   id: number;
   user_id: number;
+  symbol: string;
   type: string;
   quantity: number;
   price: number;
   timestamp: string;
+}
+
+export interface SymbolInfo {
+  id: number;
+  symbol: string;
+  name: string;
 }

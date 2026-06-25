@@ -6,11 +6,13 @@ import { Loader2, RefreshCcw, X } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { toast } from "sonner";
+import { useState } from "react";
 
 type Order = {
   orderId: string;
   price: number;
   quantity: number;
+  symbol: string;
 };
 
 type OrdersResponse = {
@@ -28,19 +30,25 @@ type CancelOrderResponse = {
 };
 
 export default function Orders() {
+  const [symbol, setSymbol] = useState("TNV");
   const queryClient = useQueryClient();
   const { data, isLoading, refetch } = useQuery<OrdersResponse>({
-    queryKey: ["myorders"],
-    queryFn: async () => await api<OrdersResponse>("/trade/myorders"),
+    queryKey: ["myorders", symbol],
+    queryFn: async () =>
+      await api<OrdersResponse>(`/trade/myorders?symbol=${symbol}`),
     refetchOnWindowFocus: true,
     retry: false,
   });
 
   const cancelOrder = useMutation({
-    mutationFn: async ({ orderId, side }: { orderId: string; side: string }) =>
+    mutationFn: async ({
+      orderId,
+      side,
+      symbol: sym,
+    }: { orderId: string; side: string; symbol: string }) =>
       await api<CancelOrderResponse>("/trade/cancelorder", {
         method: "POST",
-        body: JSON.stringify({ orderId, side }),
+        body: JSON.stringify({ orderId, side, symbol: sym }),
       }),
     onSuccess: (data) => {
       if (data.ok) {
@@ -81,13 +89,26 @@ export default function Orders() {
       <CardHeader>
         <CardTitle className="text-lg font-semibold flex items-center justify-between">
           Active Orders
-          <Button
-            onClick={() => refetch()}
-            variant="ghost"
-            size="icon"
-            disabled={isLoading}>
-            <RefreshCcw className={isLoading ? "animate-spin" : ""} />
-          </Button>
+          <div className="flex items-center gap-2">
+            <select
+              value={symbol}
+              onChange={(e) => setSymbol(e.target.value)}
+              className="bg-transparent border border-border rounded px-2 py-1 text-xs font-mono"
+            >
+              <option value="TNV">TNV</option>
+              <option value="AAPL">AAPL</option>
+              <option value="GOOGL">GOOGL</option>
+              <option value="MSFT">MSFT</option>
+              <option value="TSLA">TSLA</option>
+            </select>
+            <Button
+              onClick={() => refetch()}
+              variant="ghost"
+              size="icon"
+              disabled={isLoading}>
+              <RefreshCcw className={isLoading ? "animate-spin" : ""} />
+            </Button>
+          </div>
         </CardTitle>
       </CardHeader>
       <CardContent>
@@ -108,6 +129,7 @@ export default function Orders() {
                       cancelOrder.mutate({
                         orderId: order.orderId,
                         side: "bid",
+                        symbol,
                       })
                     }
                     variant="outline"
@@ -139,6 +161,7 @@ export default function Orders() {
                       cancelOrder.mutate({
                         orderId: order.orderId,
                         side: "ask",
+                        symbol,
                       })
                     }
                     variant="outline"

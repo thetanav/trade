@@ -6,8 +6,14 @@ import authRoutes from "./routes/auth";
 import userRoutes from "./routes/user";
 import tradeRoutes from "./routes/trade";
 import { Hono } from "hono";
-import { updateChart, setChartBroadcast } from "./utils/chart";
-import { chart } from "./memory";
+import {
+  updateChart,
+  setChartBroadcast,
+  initChart,
+  getCandles,
+} from "./utils/chart";
+import { db } from "./db";
+import { symbols } from "./schema";
 import { createServer } from "http";
 import { Server as SocketIOServer } from "socket.io";
 import { serve } from "@hono/node-server";
@@ -24,19 +30,14 @@ app.use(
 );
 
 const limiter = rateLimiter({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  limit: 100, // limit each IP to 100 requests per windowMs
+  windowMs: 15 * 60 * 1000,
+  limit: 100,
   message: "Too many requests from this IP, please try again later.",
   keyGenerator: (c) =>
     c.req.header("CF-Connecting-IP") ||
     c.req.header("X-Forwarded-For") ||
     "127.0.0.1",
 });
-// app.use(limiter);
-
-const clients = new Set<{
-  res: any; // TODO: update for Hono
-}>();
 
 const httpServer = createServer();
 const io = new SocketIOServer(httpServer, {
@@ -52,86 +53,93 @@ app.route("/auth", authRoutes);
 app.route("/user", userRoutes);
 
 export const redisClient = createClient({
-  url: process.env.REDIS_URL,
+  url: process.env.REDIS_URL!,
 });
 
-redisClient
-  .connect()
-  .then(() => {
-    console.log("Connected to Redis");
-  })
-  .catch((err: unknown) => {
-    console.error("Redis connection error:", err);
-  });
+let activeSymbols: string[] = [];
 
-updateChart(chart, redisClient);
+async function init() {
+  await redisClient.connect();
+  console.log("Connected to Redis");
+
+  // Load active symbols from DB
+  const allSymbols = await db.select().from(symbols);
+  activeSymbols = allSymbols.map((s) => s.symbol);
+  console.log("Active symbols:", activeSymbols);
+
+  // Load chart data from DB
+  await initChart(db, activeSymbols);
+
+  // Start chart updater
+  updateChart(db, redisClient, activeSymbols);
+}
+
+init().catch((err) => console.error("Init error:", err));
 
 app.get("/ping", (c) => {
   return c.json({ status: "healthy", timestamp: new Date().toISOString() });
 });
 
-// app.get("/sse/orderbook", (req: Request, res: Response) => {
-//   res.set({
-//     "Content-Type": "text/event-stream",
-//     "Cache-Control": "no-cache",
-//     Connection: "keep-alive",
-//   });
+app.get("/symbols", async (c) => {
+  const allSymbols = await db.select().from(symbols);
+  return c.json(allSymbols);
+});
 
-//   res.flushHeaders();
-
-//   const client = { res };
-//   clients.add(client);
-
-//   req.on("close", () => {
-//     clients.delete(client);
-//   });
-// });
-
-export async function sendOrderbook() {
-  try {
-    const asks = await redisClient.lRange("asks", 0, -1);
-    const bids = await redisClient.lRange("bids", 0, -1);
-    const orderbook = {
-      asks: asks.map((a) => {
-        const parsed = JSON.parse(a);
-        return { price: parsed.price, quantity: parsed.quantity };
-      }),
-      bids: bids.map((b) => {
-        const parsed = JSON.parse(b);
-        return { price: parsed.price, quantity: parsed.quantity };
-      }),
-    };
-    io.emit("depth", orderbook);
-    for (const client of clients) {
-      client.res.write(`event: orderbook\n`);
-      client.res.write(`data: ${JSON.stringify(orderbook)}\n\n`);
+export async function sendOrderbook(symbol?: string) {
+  const syms = symbol ? [symbol] : activeSymbols;
+  for (const sym of syms) {
+    try {
+      const asks = await redisClient.lRange(`asks:${sym}`, 0, -1);
+      const bids = await redisClient.lRange(`bids:${sym}`, 0, -1);
+      const orderbook = {
+        symbol: sym,
+        asks: asks.map((a: string) => {
+          const parsed = JSON.parse(a);
+          return { price: parsed.price, quantity: parsed.quantity };
+        }),
+        bids: bids.map((b: string) => {
+          const parsed = JSON.parse(b);
+          return { price: parsed.price, quantity: parsed.quantity };
+        }),
+      };
+      io.to(`symbol:${sym}`).emit("depth", orderbook);
+    } catch (err: any) {
+      console.error(`Failed to broadcast orderbook for ${sym}`, err);
     }
-  } catch (err: any) {
-    console.error("Failed to broadcast orderbook from Redis", err);
   }
 }
 
 io.on("connection", (socket) => {
-  const seedDepth = async () => {
-    try {
-      const asks = await redisClient.lRange("asks", 0, -1);
-      const bids = await redisClient.lRange("bids", 0, -1);
-      socket.emit("depth", {
-        asks: asks.map((a) => {
-          const parsed = JSON.parse(a);
-          return { price: parsed.price, quantity: parsed.quantity };
-        }),
-        bids: bids.map((b) => {
-          const parsed = JSON.parse(b);
-          return { price: parsed.price, quantity: parsed.quantity };
-        }),
-      });
-    } catch (err) {
-      console.error("Failed to seed depth", err);
-    }
-  };
+  // Client joins symbol room
+  socket.on("joinSymbol", (symbol: string) => {
+    const sym = symbol.toUpperCase();
+    socket.join(`symbol:${sym}`);
+    console.log(`Socket ${socket.id} joined symbol:${sym}`);
 
-  const seedChart = () => {
+    // Seed depth for this symbol
+    redisClient
+      .lRange(`asks:${sym}`, 0, -1)
+      .then((asks: string[]) =>
+        redisClient.lRange(`bids:${sym}`, 0, -1).then((bids: string[]) => {
+          socket.emit("depth", {
+            symbol: sym,
+            asks: asks.map((a: string) => {
+              const parsed = JSON.parse(a);
+              return { price: parsed.price, quantity: parsed.quantity };
+            }),
+            bids: bids.map((b: string) => {
+              const parsed = JSON.parse(b);
+              return { price: parsed.price, quantity: parsed.quantity };
+            }),
+          });
+        }),
+      )
+      .catch((err: any) =>
+        console.error("Failed to seed depth for symbol:", err),
+      );
+
+    // Seed chart for this symbol
+    const chart = getCandles(sym);
     socket.emit(
       "chart",
       chart.slice(-720).map((c) => ({
@@ -142,14 +150,15 @@ io.on("connection", (socket) => {
         close: c.close,
       })),
     );
-  };
+  });
 
-  seedDepth();
-  seedChart();
+  socket.on("leaveSymbol", (symbol: string) => {
+    socket.leave(`symbol:${symbol.toUpperCase()}`);
+  });
 });
 
-setChartBroadcast((payload) => {
-  io.emit(
+setChartBroadcast((symbol: string, payload) => {
+  io.to(`symbol:${symbol}`).emit(
     "chart",
     payload.slice(-720).map((c) => ({
       time: Math.floor(c.timestamp.getTime() / 1000),

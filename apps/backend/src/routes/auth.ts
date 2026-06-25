@@ -4,7 +4,7 @@ import { db } from "../db";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import dotenv from "dotenv";
-import { users } from "../schema";
+import { users, symbols, portfolios } from "../schema";
 import { eq } from "drizzle-orm";
 
 const router = new Hono();
@@ -135,6 +135,16 @@ router.post("/signup", async (c) => {
         stock: "5",
       })
       .returning();
+
+    const allSymbols = await db.select().from(symbols);
+    for (const sym of allSymbols) {
+      const qty = sym.symbol === "TNV" ? "5" : "0";
+      await db.insert(portfolios).values({
+        userId: newUser[0].id,
+        symbol: sym.symbol,
+        quantity: qty,
+      });
+    }
 
     const token = jwt.sign(
       { id: newUser[0].id, name, email },

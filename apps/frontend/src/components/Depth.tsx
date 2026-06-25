@@ -13,14 +13,18 @@ type DepthResponse = {
   error?: string;
 };
 
-const Depth = () => {
+interface Props {
+  symbol: string;
+}
+
+const Depth = ({ symbol }: Props) => {
   const queryClient = useQueryClient();
-  const socket = useSocket();
+  const socket = useSocket(symbol);
   const { data: orderBook } = useQuery({
-    queryKey: ["depth"],
+    queryKey: ["depth", symbol],
     queryFn: async () => {
-      const res = await api<DepthResponse>("/trade/depth");
-      return res.data ?? { asks: [], bids: [] };
+      const res = await api<DepthResponse>(`/trade/depth?symbol=${symbol}`);
+      return res.data ?? { asks: [], bids: [], symbol };
     },
     refetchInterval: 5000,
   });
@@ -34,7 +38,7 @@ const Depth = () => {
       if (!payload) {
         return;
       }
-      queryClient.setQueryData(["depth"], payload);
+      queryClient.setQueryData(["depth", symbol], payload);
     };
 
     socket.on("depth", handleDepth);
@@ -42,7 +46,7 @@ const Depth = () => {
     return () => {
       socket.off("depth", handleDepth);
     };
-  }, [queryClient, socket]);
+  }, [queryClient, socket, symbol]);
 
   // Top 6 levels per side
   const topBids = useMemo(

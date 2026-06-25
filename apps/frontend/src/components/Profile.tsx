@@ -35,7 +35,20 @@ const Profile = () => {
 
   if (!data) return null;
 
-  const totalValue = Number(data.cash) + Number(data.stock) * 100;
+  // Estimate portfolio value using a simple price map
+  const prices: Record<string, number> = {
+    TNV: 100,
+    AAPL: 180,
+    GOOGL: 140,
+    MSFT: 380,
+    TSLA: 240,
+  };
+  const portfolioValue =
+    data.portfolio?.reduce(
+      (sum, p) => sum + Number(p.quantity) * (prices[p.symbol] || 100),
+      0,
+    ) || 0;
+  const totalValue = Number(data.cash) + portfolioValue;
 
   return (
     <Card className="shadow-md border-0 bg-gradient-to-br from-card to-card/50">
@@ -72,7 +85,6 @@ const Profile = () => {
       </CardHeader>
 
       <CardContent className="space-y-4">
-        {/* Portfolio Value */}
         <div className="bg-gradient-to-r from-primary/10 to-primary/5 rounded-lg p-4">
           <p className="text-xs text-muted-foreground mb-1.5 font-medium">
             Total Portfolio Value
@@ -86,7 +98,6 @@ const Profile = () => {
           </p>
         </div>
 
-        {/* Cash & Stock Grid */}
         <div className="grid grid-cols-2 gap-3">
           <div className="bg-green-50 dark:bg-green-950/20 rounded-lg p-3 border border-green-100 dark:border-green-900/30">
             <div className="flex items-center gap-1.5 mb-1.5">
@@ -104,16 +115,24 @@ const Profile = () => {
             <div className="flex items-center gap-1.5 mb-1.5">
               <TrendingUp className="w-3.5 h-3.5 text-blue-600 dark:text-blue-500" />
               <p className="text-xs text-blue-700 dark:text-blue-400 font-medium">
-                Stock Holdings
+                Holdings
               </p>
             </div>
-            <p className="font-mono font-semibold text-blue-700 dark:text-blue-400">
-              {Number(data.stock).toLocaleString()}
-            </p>
+            <div className="space-y-1">
+              {data.portfolio?.map((p) => (
+                <div key={p.symbol} className="flex justify-between text-xs">
+                  <span className="font-mono text-blue-600 dark:text-blue-400">
+                    {p.symbol}
+                  </span>
+                  <span className="font-mono font-semibold text-blue-700 dark:text-blue-400">
+                    {Number(p.quantity).toLocaleString()}
+                  </span>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
 
-        {/* Member Since */}
         {data.createdAt && (
           <div className="pt-2 text-center">
             <p className="text-xs text-muted-foreground">
