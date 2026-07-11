@@ -1,11 +1,11 @@
 "use client";
 
-import { useEffect, useMemo } from "react";
+import { useMemo } from "react";
 import { Card, CardContent, CardHeader } from "./ui/card";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { Orderbook } from "@/types";
-import { useSocket } from "@/hooks/useSocket";
+import { useMarketStream } from "@/hooks/useMarketStream";
 
 type DepthResponse = {
   ok: boolean;
@@ -18,67 +18,53 @@ interface Props {
 }
 
 const Depth = ({ symbol }: Props) => {
-  const queryClient = useQueryClient();
-  const socket = useSocket(symbol);
+  useMarketStream(symbol);
+
   const { data: orderBook } = useQuery({
     queryKey: ["depth", symbol],
     queryFn: async () => {
       const res = await api<DepthResponse>(`/trade/depth?symbol=${symbol}`);
-      return res.data ?? { asks: [], bids: [], symbol };
+      return (
+        res.data ?? {
+          asks: [],
+          bids: [],
+          symbol,
+        }
+      );
     },
-    refetchInterval: 5000,
+    // SSE keeps this fresh; long interval is a safety net only
+    refetchInterval: 60_000,
+    refetchOnWindowFocus: true,
   });
 
-  useEffect(() => {
-    if (!socket) {
-      return;
-    }
-
-    const handleDepth = (payload: Orderbook) => {
-      if (!payload) {
-        return;
-      }
-      queryClient.setQueryData(["depth", symbol], payload);
-    };
-
-    socket.on("depth", handleDepth);
-
-    return () => {
-      socket.off("depth", handleDepth);
-    };
-  }, [queryClient, socket, symbol]);
-
-  // Top 6 levels per side
   const topBids = useMemo(
     () => orderBook?.bids?.slice(0, 6) || [],
-    [orderBook]
+    [orderBook],
   );
   const topAsks = useMemo(
     () => orderBook?.asks?.slice(0, 6) || [],
-    [orderBook]
+    [orderBook],
   );
 
-  // Totals & percentages
   const bidTotal = useMemo(
     () => topBids.reduce((acc, o) => acc + o.quantity, 0),
-    [topBids]
+    [topBids],
   );
   const askTotal = useMemo(
     () => topAsks.reduce((acc, o) => acc + o.quantity, 0),
-    [topAsks]
+    [topAsks],
   );
   const combinedTotal = bidTotal + askTotal || 1;
   const buyPct = (bidTotal / combinedTotal) * 100;
   const sellPct = 100 - buyPct;
 
-  // Relative sizing within each side for background intensity
   const maxBidQty = useMemo(
     () => (topBids.length ? Math.max(...topBids.map((o) => o.quantity)) : 1),
-    [topBids]
+    [topBids],
   );
   const maxAskQty = useMemo(
     () => (topAsks.length ? Math.max(...topAsks.map((o) => o.quantity)) : 1),
-    [topAsks]
+    [topAsks],
   );
 
   return (
@@ -101,10 +87,12 @@ const Depth = ({ symbol }: Props) => {
         <div className="mt-2 h-2 w-full rounded-full overflow-hidden flex shadow-inner">
           <div
             className="bg-gradient-to-r from-green-400 to-green-600 transition-all duration-500"
-            style={{ width: `${buyPct}%` }}></div>
+            style={{ width: `${buyPct}%` }}
+          />
           <div
             className="bg-gradient-to-r from-red-600 to-red-400 transition-all duration-500"
-            style={{ width: `${sellPct}%` }}></div>
+            style={{ width: `${sellPct}%` }}
+          />
         </div>
       </CardHeader>
       <CardContent className="pt-2">
@@ -118,7 +106,7 @@ const Depth = ({ symbol }: Props) => {
                 <th className="px-2 text-left text-muted-foreground w-[90px]">
                   Qty
                 </th>
-                <th className="px-2"></th>
+                <th className="px-2" />
                 <th className="px-2 text-left text-muted-foreground w-[120px]">
                   Ask price
                 </th>
@@ -136,7 +124,8 @@ const Depth = ({ symbol }: Props) => {
                 return (
                   <tr
                     key={i}
-                    className="align-middle group hover:bg-muted/30 transition-colors">
+                    className="align-middle group hover:bg-muted/30 transition-colors"
+                  >
                     <td className="px-2 py-1.5 font-medium">
                       {bid ? `$${bid.price}` : ""}
                     </td>
@@ -178,7 +167,7 @@ const Depth = ({ symbol }: Props) => {
                 <td className="px-2 pt-2 text-green-600 dark:text-green-500 font-bold">
                   {bidTotal}
                 </td>
-                <td></td>
+                <td />
                 <td className="px-2 pt-2 text-muted-foreground">Ask total</td>
                 <td className="px-2 pt-2 text-red-600 dark:text-red-500 font-bold">
                   {askTotal}

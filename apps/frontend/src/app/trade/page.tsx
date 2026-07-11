@@ -16,6 +16,10 @@ export default function TradePage() {
     queryFn: async () => await api<SymbolInfo[]>("/symbols"),
   });
 
+  const options = symbols?.length
+    ? symbols
+    : [{ id: 0, symbol: "TNV", name: "TradeX Coin" }];
+
   return (
     <div className="px-2 py-6">
       <div className="mb-4">
@@ -24,18 +28,18 @@ export default function TradePage() {
           onChange={(e) => setSymbol(e.target.value)}
           className="bg-card border border-border rounded-lg px-4 py-2 text-lg font-bold font-mono"
         >
-          {symbols?.map((s) => (
+          {options.map((s) => (
             <option key={s.symbol} value={s.symbol}>
               {s.symbol} — {s.name}
             </option>
           ))}
         </select>
       </div>
-      <div className="flex gap-2">
-        <div className="flex-1">
+      <div className="flex gap-2 flex-col lg:flex-row">
+        <div className="flex-1 min-w-0">
           <Chart symbol={symbol} />
         </div>
-        <div className="w-96 flex flex-col gap-2 h-full">
+        <div className="w-full lg:w-96 flex flex-col gap-2 h-full">
           <MakeOrder symbol={symbol} />
           <Depth symbol={symbol} />
         </div>

@@ -5,7 +5,7 @@ import { createJSONStorage, persist } from "zustand/middleware";
 import type { User } from "@/types";
 
 type AuthUser = Pick<User, "id" | "name" | "email"> &
-  Partial<Pick<User, "stock" | "cash" | "createdAt">>;
+  Partial<Pick<User, "cash" | "createdAt">>;
 
 type AuthState = {
   token: string | null;

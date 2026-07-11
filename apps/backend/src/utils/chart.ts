@@ -18,6 +18,7 @@ export function getCandles(symbol: string): Chart[] {
   return candlesPerSymbol.get(symbol) || [];
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function initChart(db: any, symbols: string[]) {
   for (const symbol of symbols) {
     try {

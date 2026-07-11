@@ -1,11 +1,12 @@
 import { cors } from "hono/cors";
+import { streamSSE } from "hono/streaming";
 import { rateLimiter } from "hono-rate-limiter";
 import dotenv from "dotenv";
-import { createClient } from "redis";
+import { Hono } from "hono";
+import { serve } from "@hono/node-server";
 import authRoutes from "./routes/auth";
 import userRoutes from "./routes/user";
 import tradeRoutes from "./routes/trade";
-import { Hono } from "hono";
 import {
   updateChart,
   setChartBroadcast,
@@ -14,24 +15,32 @@ import {
 } from "./utils/chart";
 import { db } from "./db";
 import { symbols } from "./schema";
-import { createServer } from "http";
-import { Server as SocketIOServer } from "socket.io";
-import { serve } from "@hono/node-server";
+import { connectRedis, redisClient } from "./redis";
+import {
+  broadcastChart,
+  formatChartPayload,
+  registerSseClient,
+  unregisterSseClient,
+} from "./sse";
+import { parseOrderbook } from "./matching";
 
 dotenv.config();
 
 export const app = new Hono();
 
+const frontendOrigin =
+  process.env.FRONTEND_ORIGIN || process.env.FRONTEND_URL || "http://localhost:3000";
+
 app.use(
   cors({
-    origin: "http://localhost:3000",
+    origin: frontendOrigin,
     credentials: true,
   }),
 );
 
 const limiter = rateLimiter({
   windowMs: 15 * 60 * 1000,
-  limit: 100,
+  limit: 300,
   message: "Too many requests from this IP, please try again later.",
   keyGenerator: (c) =>
     c.req.header("CF-Connecting-IP") ||
@@ -39,38 +48,23 @@ const limiter = rateLimiter({
     "127.0.0.1",
 });
 
-const httpServer = createServer();
-const io = new SocketIOServer(httpServer, {
-  cors: {
-    origin: "http://localhost:3000",
-    credentials: true,
-  },
-});
+app.use("*", limiter);
 
-// API Routes
 app.route("/trade", tradeRoutes);
 app.route("/auth", authRoutes);
 app.route("/user", userRoutes);
 
-export const redisClient = createClient({
-  url: process.env.REDIS_URL!,
-});
-
 let activeSymbols: string[] = [];
 
 async function init() {
-  await redisClient.connect();
+  await connectRedis();
   console.log("Connected to Redis");
 
-  // Load active symbols from DB
   const allSymbols = await db.select().from(symbols);
   activeSymbols = allSymbols.map((s) => s.symbol);
   console.log("Active symbols:", activeSymbols);
 
-  // Load chart data from DB
   await initChart(db, activeSymbols);
-
-  // Start chart updater
   updateChart(db, redisClient, activeSymbols);
 }
 
@@ -85,95 +79,63 @@ app.get("/symbols", async (c) => {
   return c.json(allSymbols);
 });
 
-export async function sendOrderbook(symbol?: string) {
-  const syms = symbol ? [symbol] : activeSymbols;
-  for (const sym of syms) {
+/** Server-Sent Events stream for live depth + chart updates. */
+app.get("/events", async (c) => {
+  const symbol = (c.req.query("symbol") || "TNV").toUpperCase();
+  const clientId = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+
+  return streamSSE(c, async (stream) => {
+    let closed = false;
+
+    const send = async (event: string, data: unknown) => {
+      if (closed) return;
+      await stream.writeSSE({
+        event,
+        data: JSON.stringify(data),
+      });
+    };
+
+    const close = () => {
+      closed = true;
+    };
+
+    registerSseClient({ id: clientId, symbol, send, close });
+
+    // Seed current state so UI is immediately consistent
     try {
-      const asks = await redisClient.lRange(`asks:${sym}`, 0, -1);
-      const bids = await redisClient.lRange(`bids:${sym}`, 0, -1);
-      const orderbook = {
-        symbol: sym,
-        asks: asks.map((a: string) => {
-          const parsed = JSON.parse(a);
-          return { price: parsed.price, quantity: parsed.quantity };
-        }),
-        bids: bids.map((b: string) => {
-          const parsed = JSON.parse(b);
-          return { price: parsed.price, quantity: parsed.quantity };
-        }),
-      };
-      io.to(`symbol:${sym}`).emit("depth", orderbook);
-    } catch (err: any) {
-      console.error(`Failed to broadcast orderbook for ${sym}`, err);
+      const depth = await parseOrderbook(symbol);
+      await send("depth", depth);
+      await send("chart", formatChartPayload(getCandles(symbol)));
+    } catch (err) {
+      console.error("Failed to seed SSE client:", err);
     }
-  }
-}
 
-io.on("connection", (socket) => {
-  // Client joins symbol room
-  socket.on("joinSymbol", (symbol: string) => {
-    const sym = symbol.toUpperCase();
-    socket.join(`symbol:${sym}`);
-    console.log(`Socket ${socket.id} joined symbol:${sym}`);
+    // Keep-alive pings prevent proxies from closing idle connections
+    while (!closed) {
+      try {
+        await stream.writeSSE({
+          event: "ping",
+          data: JSON.stringify({ t: Date.now() }),
+        });
+        await stream.sleep(25_000);
+      } catch {
+        closed = true;
+      }
+    }
 
-    // Seed depth for this symbol
-    redisClient
-      .lRange(`asks:${sym}`, 0, -1)
-      .then((asks: string[]) =>
-        redisClient.lRange(`bids:${sym}`, 0, -1).then((bids: string[]) => {
-          socket.emit("depth", {
-            symbol: sym,
-            asks: asks.map((a: string) => {
-              const parsed = JSON.parse(a);
-              return { price: parsed.price, quantity: parsed.quantity };
-            }),
-            bids: bids.map((b: string) => {
-              const parsed = JSON.parse(b);
-              return { price: parsed.price, quantity: parsed.quantity };
-            }),
-          });
-        }),
-      )
-      .catch((err: any) =>
-        console.error("Failed to seed depth for symbol:", err),
-      );
-
-    // Seed chart for this symbol
-    const chart = getCandles(sym);
-    socket.emit(
-      "chart",
-      chart.slice(-720).map((c) => ({
-        time: Math.floor(c.timestamp.getTime() / 1000),
-        open: c.open,
-        high: c.high,
-        low: c.low,
-        close: c.close,
-      })),
-    );
-  });
-
-  socket.on("leaveSymbol", (symbol: string) => {
-    socket.leave(`symbol:${symbol.toUpperCase()}`);
+    unregisterSseClient(clientId);
   });
 });
 
-setChartBroadcast((symbol: string, payload) => {
-  io.to(`symbol:${symbol}`).emit(
-    "chart",
-    payload.slice(-720).map((c) => ({
-      time: Math.floor(c.timestamp.getTime() / 1000),
-      open: c.open,
-      high: c.high,
-      low: c.low,
-      close: c.close,
-    })),
-  );
+setChartBroadcast((symbol, payload) => {
+  void broadcastChart(symbol, payload);
 });
 
 const port = Number(process.env.PORT) || 8080;
 
 serve({
   fetch: app.fetch,
-  createServer: () => httpServer,
   port,
 });
+
+console.log(`TradeX API listening on http://localhost:${port}`);

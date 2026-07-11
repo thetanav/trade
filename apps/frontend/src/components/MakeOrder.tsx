@@ -6,8 +6,8 @@ import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useState } from "react";
 import { toast } from "sonner";
-import { useMutation } from "@tanstack/react-query";
-import { api } from "@/lib/api";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { api, ApiError } from "@/lib/api";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 
@@ -28,6 +28,7 @@ interface Props {
 }
 
 const MakeOrder = ({ symbol }: Props) => {
+  const queryClient = useQueryClient();
   const [formData, setFormData] = useState<FormData>({
     side: "bid",
     price: "",
@@ -36,17 +37,21 @@ const MakeOrder = ({ symbol }: Props) => {
   });
 
   const { isPending, mutate } = useMutation({
-    mutationFn: async (data: FormData & { sym: string }) =>
-      await api<MakeOrderResponse>("/trade/makeorder", {
+    mutationFn: async (data: FormData & { sym: string }) => {
+      const body: Record<string, unknown> = {
+        side: data.side,
+        symbol: data.sym,
+        quantity: Number(data.quantity),
+        market: data.market,
+      };
+      if (!data.market) {
+        body.price = Number(data.price);
+      }
+      return await api<MakeOrderResponse>("/trade/makeorder", {
         method: "POST",
-        body: JSON.stringify({
-          side: data.side,
-          symbol: data.sym,
-          price: Number(data.price),
-          quantity: Number(data.quantity),
-          market: data.market,
-        }),
-      }),
+        body: JSON.stringify(body),
+      });
+    },
     onSuccess: (data) => {
       if (data.ok) {
         toast.success(data.msg || "Order submitted successfully!");
@@ -54,8 +59,17 @@ const MakeOrder = ({ symbol }: Props) => {
       } else {
         toast.info(data.msg);
       }
+      void queryClient.invalidateQueries({ queryKey: ["depth", symbol] });
+      void queryClient.invalidateQueries({ queryKey: ["myorders"] });
+      void queryClient.invalidateQueries({ queryKey: ["order-history"] });
+      void queryClient.invalidateQueries({ queryKey: ["user_info"] });
+      void queryClient.invalidateQueries({ queryKey: ["transactions"] });
     },
-    onError: () => {
+    onError: (err) => {
+      if (err instanceof ApiError) {
+        toast.error(err.message);
+        return;
+      }
       toast.warning("Network busy.");
     },
   });
@@ -76,7 +90,9 @@ const MakeOrder = ({ symbol }: Props) => {
   return (
     <Card className="rounded-lg">
       <CardHeader>
-        <CardTitle className="text-lg font-semibold">Place Order</CardTitle>
+        <CardTitle className="text-lg font-semibold">
+          Place Order — {symbol}
+        </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
         <Tabs
@@ -124,6 +140,7 @@ const MakeOrder = ({ symbol }: Props) => {
                 id="price"
                 type="number"
                 step="0.01"
+                min="0.01"
                 value={formData.price}
                 onChange={(e) =>
                   setFormData((prev) => ({ ...prev, price: e.target.value }))
@@ -143,6 +160,7 @@ const MakeOrder = ({ symbol }: Props) => {
               id="quantity"
               type="number"
               step="1"
+              min="1"
               value={formData.quantity}
               onChange={(e) =>
                 setFormData((prev) => ({ ...prev, quantity: e.target.value }))

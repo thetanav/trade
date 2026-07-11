@@ -15,8 +15,9 @@ import { Button } from "../../components/ui/button";
 import { useState } from "react";
 import { toast } from "sonner";
 import { useMutation } from "@tanstack/react-query";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import { Loader2 } from "lucide-react";
+import { useAuthStore } from "@/store/auth";
 
 type SignupForm = {
   name: string;
@@ -33,6 +34,7 @@ type SignupResponse = {
 
 export default function Signup() {
   const router = useRouter();
+  const { setToken, setAuthenticated } = useAuthStore();
   const [formData, setFormData] = useState<SignupForm>({
     name: "",
     email: "",
@@ -51,11 +53,20 @@ export default function Signup() {
         toast.error(data.msg);
         return;
       }
+      if (data.token) {
+        localStorage.setItem("token", data.token);
+        setToken(data.token);
+        setAuthenticated(true);
+      }
       toast.success(data.msg);
-      router.push("/login");
+      router.push("/dashboard");
     },
-    onError: () => {
-      toast.error("Unable to create account. Please try again.");
+    onError: (err) => {
+      toast.error(
+        err instanceof ApiError
+          ? err.message
+          : "Unable to create account. Please try again.",
+      );
     },
   });
 

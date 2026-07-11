@@ -9,21 +9,49 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 import { useAuthStore } from "@/store/auth";
 
+type VerifyResponse = {
+  user: {
+    id: number | string;
+    name: string;
+    email: string;
+  };
+};
+
+const navLinks = [
+  { href: "/dashboard", label: "Dashboard" },
+  { href: "/trade", label: "Trade" },
+  { href: "/order", label: "Orders" },
+  { href: "/transactions", label: "Transactions" },
+] as const;
+
+function NavLinks() {
+  return (
+    <div className="flex items-center gap-4 text-sm font-medium text-muted-foreground px-6">
+      {navLinks.map((link) => (
+        <Link
+          key={link.href}
+          href={link.href}
+          className="hover:text-foreground transition-colors"
+        >
+          {link.label}
+        </Link>
+      ))}
+    </div>
+  );
+}
+
 export default function Auth() {
   const router = useRouter();
   const { user, isAuthenticated, setUser, setAuthenticated, clearAuth } =
     useAuthStore();
-  const { data } = useQuery({
+
+  const { data, isError, isLoading } = useQuery({
     queryKey: ["user"],
-    queryFn: async () =>
-      api<{
-        user: {
-          id: string;
-          name: string;
-          email: string;
-        };
-      }>("/user/verify"),
+    queryFn: async () => api<VerifyResponse>("/user/verify"),
+    retry: false,
+    staleTime: 60_000,
   });
+
   const { mutate, isPending } = useMutation({
     mutationFn: async () => await api("/auth/logout"),
   });
@@ -31,85 +59,53 @@ export default function Auth() {
   const handleSignOut = useCallback(() => {
     localStorage.removeItem("token");
     clearAuth();
-    mutate();
-    router.push("/");
+    mutate(undefined, {
+      onSettled: () => router.push("/"),
+    });
   }, [clearAuth, mutate, router]);
 
   useEffect(() => {
-    if (!data) return;
-    setUser(data.user ?? null);
-    setAuthenticated(!!data.user);
-  }, [data, setAuthenticated, setUser]);
-
-  if (!data) {
-    if (!isAuthenticated) {
-      return (
-        <Button asChild>
-          <Link href="/signup">Create Account</Link>
-        </Button>
-      );
+    if (data?.user) {
+      setUser({
+        id: String(data.user.id),
+        name: data.user.name,
+        email: data.user.email,
+      });
+      setAuthenticated(true);
+      return;
     }
+    if (isError) {
+      setUser(null);
+      setAuthenticated(false);
+    }
+  }, [data, isError, setAuthenticated, setUser]);
 
+  if (isLoading && !isAuthenticated) {
     return (
-      <div className="flex items-center gap-2">
-        <div className="flex items-center gap-4 text-sm font-medium text-muted-foreground">
-          <Link
-            href="/dashboard"
-            className="hover:text-foreground transition-colors"
-          >
-            Dashboard
-          </Link>
-          <Link
-            href="/trade"
-            className="hover:text-foreground transition-colors"
-          >
-            Trade
-          </Link>
-          <Link
-            href="/order"
-            className="hover:text-foreground transition-colors"
-          >
-            Orders
-          </Link>
-        </div>
-        <Button variant="outline" onClick={handleSignOut} disabled={isPending}>
-          {isPending && <Loader2 className="w-5 h-5 animate-spin" />}
-          Sign Out
-        </Button>
-      </div>
+      <Button variant="ghost" disabled>
+        <Loader2 className="w-4 h-4 animate-spin" />
+      </Button>
     );
   }
 
-  if (!user) {
+  const signedIn = !!user || (!!data?.user && !isError);
+
+  if (!signedIn) {
     return (
-      <Button asChild>
-        <Link href="/signup">Create Account</Link>
-      </Button>
+      <div className="flex items-center gap-2">
+        <Button variant="ghost" asChild>
+          <Link href="/login">Sign In</Link>
+        </Button>
+        <Button asChild>
+          <Link href="/signup">Create Account</Link>
+        </Button>
+      </div>
     );
   }
 
   return (
     <div className="flex items-center gap-2">
-      <div className="flex items-center gap-4 text-sm font-medium text-muted-foreground px-6">
-        <Link
-          href="/dashboard"
-          className="hover:text-foreground transition-colors"
-        >
-          Dashboard
-        </Link>
-        <Link href="/trade" className="hover:text-foreground transition-colors">
-          Trade
-        </Link>
-        <Link href="/order" className="hover:text-foreground transition-colors">
-          Orders
-        </Link>
-        <Link
-          href="/transactions"
-          className="text-muted-foreground hover:text-foreground transition-colors"
-        >
-          Transactions
-        </Link>
-      </div>
+      <NavLinks />
       <Button variant="outline" onClick={handleSignOut} disabled={isPending}>
         {isPending && <Loader2 className="w-5 h-5 animate-spin" />}
         Sign Out

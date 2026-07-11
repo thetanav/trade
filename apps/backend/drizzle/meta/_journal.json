@@ -1,5 +1,5 @@
 {
-  "version": "1",
+  "version": "7",
   "dialect": "postgresql",
   "entries": [
     {
@@ -7,6 +7,20 @@
       "version": "7",
       "when": 1751101831843,
       "tag": "0000_lame_blockbuster",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1751101900000,
+      "tag": "0001_symbols_portfolios_candles",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1752200000000,
+      "tag": "0002_orders_history",
       "breakpoints": true
     }
   ]

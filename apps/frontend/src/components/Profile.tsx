@@ -8,10 +8,43 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import Image from "next/image";
 
+function midPrice(bids: { price: number }[], asks: { price: number }[]): number {
+  if (bids.length && asks.length) {
+    return (bids[0].price + asks[0].price) / 2;
+  }
+  if (bids.length) return bids[0].price;
+  if (asks.length) return asks[0].price;
+  return 0;
+}
+
 const Profile = () => {
   const { data, isLoading, refetch, isFetching } = useQuery({
     queryKey: ["user_info"],
     queryFn: async () => await api<UserType | null>("/user"),
+  });
+
+  const symbols = data?.portfolio?.map((p) => p.symbol) ?? [];
+
+  const { data: prices } = useQuery({
+    queryKey: ["portfolio_prices", symbols],
+    queryFn: async () => {
+      const map: Record<string, number> = {};
+      await Promise.all(
+        symbols.map(async (sym) => {
+          try {
+            const res = await api<{
+              ok: boolean;
+              data: { bids: { price: number }[]; asks: { price: number }[] };
+            }>(`/trade/depth?symbol=${sym}`);
+            map[sym] = midPrice(res.data.bids, res.data.asks);
+          } catch {
+            map[sym] = 0;
+          }
+        }),
+      );
+      return map;
+    },
+    enabled: symbols.length > 0,
   });
 
   const formatDate = (dateString?: string) => {
@@ -33,19 +66,20 @@ const Profile = () => {
     );
   }
 
-  if (!data) return null;
+  if (!data || !data.email) {
+    return (
+      <Card className="shadow-md border-0">
+        <CardContent className="py-8 text-center text-sm text-muted-foreground">
+          Sign in to view your portfolio.
+        </CardContent>
+      </Card>
+    );
+  }
 
-  // Estimate portfolio value using a simple price map
-  const prices: Record<string, number> = {
-    TNV: 100,
-    AAPL: 180,
-    GOOGL: 140,
-    MSFT: 380,
-    TSLA: 240,
-  };
+  // Estimate portfolio value using mid-market prices from order book
   const portfolioValue =
     data.portfolio?.reduce(
-      (sum, p) => sum + Number(p.quantity) * (prices[p.symbol] || 100),
+      (sum, p) => sum + Number(p.quantity) * (prices?.[p.symbol] ?? 0),
       0,
     ) || 0;
   const totalValue = Number(data.cash) + portfolioValue;

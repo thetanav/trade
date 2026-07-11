@@ -2,7 +2,6 @@ export interface User {
   id: string;
   name: string;
   email: string;
-  stock: number;
   cash: number;
   portfolio: PortfolioEntry[];
   createdAt?: string;
@@ -35,13 +34,41 @@ export interface Transaction {
   user_id: number;
   symbol: string;
   type: string;
-  quantity: number;
-  price: number;
+  quantity: number | string;
+  price: number | string;
   timestamp: string;
+}
+
+export interface PaginatedResponse<T> {
+  data: T[];
+  page: number;
+  limit: number;
+  total: number;
+  totalPages: number;
 }
 
 export interface SymbolInfo {
   id: number;
   symbol: string;
   name: string;
+}
+
+export interface UserOrder {
+  orderId: string;
+  price: number;
+  quantity: number;
+  symbol: string;
+}
+
+export interface OrderHistoryEntry {
+  orderId: string;
+  symbol: string;
+  side: "bid" | "ask" | string;
+  price: number;
+  quantity: number;
+  filledQuantity: number;
+  status: "open" | "filled" | "cancelled" | "partial" | string;
+  market: boolean;
+  createdAt?: string | null;
+  updatedAt?: string | null;
 }

@@ -1,1 +1,15 @@
-- Pagination for transactions
+# Done
+
+- [x] Pagination for transactions page
+- [x] SSE for realtime updates in UI
+- [x] Project-wide fixes so trading flow works correctly
+- [x] Senior-level refactors (matching engine, SSE, API client, auth)
+- [x] Reserve cash / holdings when placing limit orders
+- [x] Order history (filled / cancelled / partial) separate from open orders
+- [x] Matching engine unit tests (`bun test` in apps/backend)
+- [x] Fix FRONTEND_URL / FRONTEND_ORIGIN env var mismatch
+- [x] Fix market order partial fill response (`ok: true` for successful partial fills)
+- [x] Remove vestigial `users.stock` column from API and frontend types
+- [x] Replace hardcoded portfolio prices with real mid-market prices from order book
+- [x] Extract duplicated user-lookup-by-email into shared `getUserByEmail` helper
+- [x] Clean up unused `NEXT_PUBLIC_WS_URL` env var

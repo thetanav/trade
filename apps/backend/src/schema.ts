@@ -5,6 +5,7 @@ import {
   numeric,
   timestamp,
   integer,
+  boolean,
 } from "drizzle-orm/pg-core";
 
 export const users = pgTable("users", {
@@ -51,3 +52,20 @@ export const transactions = pgTable("transactions", {
   price: numeric("price"),
   timestamp: timestamp().defaultNow(),
 });
+
+/** Persistent order lifecycle (open / filled / cancelled / partial). */
+export const orders = pgTable("orders", {
+  id: serial("id").primaryKey(),
+  orderId: varchar("order_id", { length: 64 }).notNull().unique(),
+  userId: integer("user_id").notNull(),
+  symbol: varchar("symbol", { length: 10 }).notNull(),
+  side: varchar("side", { length: 4 }).notNull(), // bid | ask
+  price: numeric("price").notNull().default("0"),
+  quantity: integer("quantity").notNull(),
+  filledQuantity: integer("filled_quantity").notNull().default(0),
+  status: varchar("status", { length: 16 }).notNull().default("open"),
+  market: boolean("market").notNull().default(false),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+

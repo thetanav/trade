@@ -7,10 +7,10 @@ import {
   IChartApi,
   ISeriesApi,
 } from "lightweight-charts";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { Loader2 } from "lucide-react";
-import { useSocket } from "@/hooks/useSocket";
+import { useMarketStream } from "@/hooks/useMarketStream";
 
 interface Props {
   symbol: string;
@@ -20,39 +20,26 @@ export default function Chart({ symbol }: Props) {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
-  const queryClient = useQueryClient();
-  const socket = useSocket(symbol);
+
+  useMarketStream(symbol);
 
   const { data, isPending } = useQuery({
     queryKey: ["chart", symbol],
     queryFn: async () =>
       await api<CandlestickData[]>(`/trade/chart?symbol=${symbol}`),
     refetchOnWindowFocus: true,
-    refetchInterval: 5 * 60 * 60 * 1000,
+    // SSE is the primary update path
+    refetchInterval: 5 * 60 * 1000,
   });
 
   useEffect(() => {
-    if (!socket) {
-      return;
-    }
+    if (!chartContainerRef.current) return;
 
-    const handleChart = (payload: CandlestickData[]) => {
-      if (!payload || payload.length === 0) {
-        return;
-      }
-      queryClient.setQueryData(["chart", symbol], payload);
-    };
-
-    socket.on("chart", handleChart);
-
-    return () => {
-      socket.off("chart", handleChart);
-    };
-  }, [queryClient, socket, symbol]);
-
-  useEffect(() => {
-    if (!chartContainerRef.current || chartRef.current) {
-      return;
+    // Recreate chart when symbol changes
+    if (chartRef.current) {
+      chartRef.current.remove();
+      chartRef.current = null;
+      seriesRef.current = null;
     }
 
     const chart = createChart(chartContainerRef.current, {
@@ -77,9 +64,7 @@ export default function Chart({ symbol }: Props) {
     seriesRef.current = candlestickSeries;
 
     const handleResize = () => {
-      if (!chartContainerRef.current) {
-        return;
-      }
+      if (!chartContainerRef.current) return;
       chart.applyOptions({ width: chartContainerRef.current.clientWidth });
     };
 
@@ -94,9 +79,7 @@ export default function Chart({ symbol }: Props) {
   }, [symbol]);
 
   useEffect(() => {
-    if (!seriesRef.current || !data || data.length === 0) {
-      return;
-    }
+    if (!seriesRef.current || !data || data.length === 0) return;
     seriesRef.current.setData(data);
   }, [data]);
 
@@ -104,7 +87,7 @@ export default function Chart({ symbol }: Props) {
     data && data.length > 0 ? data[data.length - 1].close : "N/A";
 
   return (
-    <div className="">
+    <div>
       <div className="flex items-center justify-between mb-4 mx-4">
         <div>
           <h3 className="text-2xl font-bold">{symbol}</h3>

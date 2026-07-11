@@ -15,7 +15,7 @@ import { Button } from "../../components/ui/button";
 import { useState } from "react";
 import { toast } from "sonner";
 import { useMutation } from "@tanstack/react-query";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import { Loader2 } from "lucide-react";
 import { useAuthStore } from "@/store/auth";
 
@@ -54,6 +54,11 @@ export default function Login() {
       setAuthenticated(true);
       toast.success(data.msg);
       router.push("/dashboard");
+    },
+    onError: (err) => {
+      toast.error(
+        err instanceof ApiError ? err.message : "Unable to login. Try again.",
+      );
     },
   });
 

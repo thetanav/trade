@@ -1,184 +1,173 @@
 import { Hono } from "hono";
-import { redisClient, sendOrderbook } from "../index";
-import { db } from "../db";
-import { transactions, users, portfolios, candles } from "../schema";
-import { eq, sql, and, desc } from "drizzle-orm";
-import auth from "../middleware/jwt";
 import { z } from "zod";
+import { and, count, desc, eq, ne } from "drizzle-orm";
+import { db } from "../db";
+import { redisClient } from "../redis";
+import { candles, orders as ordersTable } from "../schema";
+import auth from "../middleware/jwt";
+import { getUserByEmail } from "../helpers";
+import {
+  bookKey,
+  fillOrders,
+  getCash,
+  getPortfolio,
+  insertSorted,
+  markOrderStatus,
+  matchKey,
+  parseOrderbook,
+  recordOrder,
+  releaseReservation,
+  reserveForOrder,
+} from "../matching";
+import { broadcastDepth } from "../sse";
+import type { Order } from "../types";
 
 const router = new Hono();
 
-const makeOrderSchema = z.object({
-  side: z.enum(["bid", "ask"]),
-  symbol: z.string().min(1).max(10).default("TNV"),
-  price: z
-    .number()
-    .refine(
-      (val) => Number.isFinite(val) && Math.round(val * 100) === val * 100,
-      { message: "Must have at most 2 decimal places" },
-    ),
-  market: z.boolean().default(false),
-  quantity: z.int().positive(),
-});
-
-function symbolKey(symbol: string, side: string): string {
-  return `${side === "bid" ? "bids" : "asks"}:${symbol.toUpperCase()}`;
-}
-
-async function getPortfolio(userId: number, symbol: string): Promise<number> {
-  const row = await db
-    .select()
-    .from(portfolios)
-    .where(
-      and(eq(portfolios.userId, userId), eq(portfolios.symbol, symbol)),
-    );
-  return row.length > 0 ? Number(row[0].quantity) : 0;
-}
-
-async function updatePortfolio(
-  userId: number,
-  symbol: string,
-  delta: number,
-) {
-  await db
-    .update(portfolios)
-    .set({
-      quantity: sql`${portfolios.quantity} + ${delta}`,
-    })
-    .where(
-      and(eq(portfolios.userId, userId), eq(portfolios.symbol, symbol)),
-    );
-}
-
-// Insert order in price-time priority order
-async function insertSorted(
-  key: string,
-  order: any,
-) {
-  const orders = (await redisClient.lRange(key, 0, -1)).map((o: string) =>
-    JSON.parse(o),
-  );
-  const isAsk = key.startsWith("asks");
-
-  let insertIdx = orders.length;
-  for (let i = 0; i < orders.length; i++) {
-    if (isAsk) {
-      // Asks: ascending price, then FIFO by timestamp
-      if (
-        order.price < orders[i].price ||
-        (order.price === orders[i].price && order.timestamp < orders[i].timestamp)
-      ) {
-        insertIdx = i;
-        break;
-      }
-    } else {
-      // Bids: descending price, then FIFO by timestamp
-      if (
-        order.price > orders[i].price ||
-        (order.price === orders[i].price && order.timestamp < orders[i].timestamp)
-      ) {
-        insertIdx = i;
-        break;
-      }
+const makeOrderSchema = z
+  .object({
+    side: z.enum(["bid", "ask"]),
+    symbol: z.string().min(1).max(10).default("TNV"),
+    price: z.number().optional(),
+    market: z.boolean().default(false),
+    quantity: z.number().int().positive(),
+  })
+  .superRefine((data, ctx) => {
+    if (data.market) return;
+    if (data.price === undefined || !Number.isFinite(data.price)) {
+      ctx.addIssue({
+        code: "custom",
+        message: "Price is required for limit orders",
+        path: ["price"],
+      });
+      return;
     }
-  }
+    if (data.price <= 0) {
+      ctx.addIssue({
+        code: "custom",
+        message: "Price must be positive",
+        path: ["price"],
+      });
+      return;
+    }
+    if (Math.round(data.price * 100) !== data.price * 100) {
+      ctx.addIssue({
+        code: "custom",
+        message: "Price must have at most 2 decimal places",
+        path: ["price"],
+      });
+    }
+  });
 
-  if (insertIdx === 0) {
-    await redisClient.lPush(key, JSON.stringify(order));
-  } else if (insertIdx >= orders.length) {
-    await redisClient.rPush(key, JSON.stringify(order));
-  } else {
-    await redisClient.lInsert(
-      key,
-      "BEFORE",
-      JSON.stringify(orders[insertIdx]),
-      JSON.stringify(order),
-    );
+function newOrderId(userId: number) {
+  return `${Date.now()}-${userId}-${Math.random().toString(36).slice(2, 11)}`;
+}
+
+async function publishOrderbook(symbol: string) {
+  try {
+    const orderbook = await parseOrderbook(symbol);
+    await broadcastDepth(orderbook);
+  } catch (err) {
+    console.error(`Failed to broadcast orderbook for ${symbol}`, err);
   }
 }
 
-// Rebuild an entire Redis list atomically
-async function rebuildList(key: string, orders: any[]) {
-  if (orders.length === 0) {
-    await redisClient.del(key);
-    return;
+/** Walk opposite book to estimate worst-case market buy cost / sell availability. */
+async function estimateMarketCost(
+  side: "bid" | "ask",
+  symbol: string,
+  quantity: number,
+): Promise<{ ok: boolean; cost?: number; available?: number; msg?: string }> {
+  const key = matchKey(symbol, side);
+  const opposite = (await redisClient.lRange(key, 0, -1)).map(
+    (o: string) => JSON.parse(o) as Order,
+  );
+
+  if (opposite.length === 0) {
+    return { ok: false, msg: `No liquidity available for market order on ${symbol}.` };
   }
-  const multi = redisClient.multi();
-  multi.del(key);
-  multi.rPush(key, orders.map((o) => JSON.stringify(o)));
-  await multi.exec();
+
+  if (side === "bid") {
+    opposite.sort((a, b) =>
+      a.price !== b.price ? a.price - b.price : a.timestamp - b.timestamp,
+    );
+    let need = quantity;
+    let cost = 0;
+    for (const o of opposite) {
+      if (need <= 0) break;
+      const take = Math.min(need, o.quantity);
+      cost += take * o.price;
+      need -= take;
+    }
+    if (need > 0) {
+      return {
+        ok: false,
+        msg: `Not enough liquidity. Only ${quantity - need} available on ${symbol}.`,
+      };
+    }
+    return { ok: true, cost };
+  }
+
+  opposite.sort((a, b) =>
+    a.price !== b.price ? b.price - a.price : a.timestamp - b.timestamp,
+  );
+  const available = opposite.reduce((s, o) => s + o.quantity, 0);
+  if (available < quantity) {
+    return {
+      ok: false,
+      msg: `Not enough liquidity. Only ${available} available on ${symbol}.`,
+    };
+  }
+  return { ok: true, available };
 }
 
 router.post("/makeorder", auth, async (c) => {
-  const { side, symbol, price, quantity, market } =
-    await makeOrderSchema.parseAsync(await c.req.json());
+  const body = await makeOrderSchema.parseAsync(await c.req.json());
+  const { side, symbol, quantity, market } = body;
+  const price = market ? 0 : (body.price as number);
 
-  const jwt = (c as any).jwt;
-  const userRow = await db
-    .select()
-    .from(users)
-    .where(eq(users.email, jwt.email));
-  const userData = userRow[0];
-  const userId = userData.id;
-  const sym = symbol.toUpperCase();
-  const key = symbolKey(sym, side);
-
-  const holdingQty = await getPortfolio(userId, sym);
-
-  if (market) {
-    if (side === "bid") {
-      const asks = (await redisClient.lRange(key, 0, -1)).map((a: any) =>
-        JSON.parse(a),
-      );
-      if (asks.length === 0) {
-        return c.json({
-          ok: false,
-          msg: `No asks available for market order on ${sym}.`,
-        });
-      }
-      const minAskPrice = Math.min(...asks.map((a) => a.price));
-      if (Number(userData.cash) < minAskPrice * quantity) {
-        return c.json({
-          ok: false,
-          msg: `Not enough cash for market order on ${sym}.`,
-        });
-      }
-    } else {
-      const bids = (await redisClient.lRange(key, 0, -1)).map((b: any) =>
-        JSON.parse(b),
-      );
-      if (bids.length === 0) {
-        return c.json({
-          ok: false,
-          msg: `No bids available for market order on ${sym}.`,
-        });
-      }
-      if (holdingQty < quantity) {
-        return c.json({
-          ok: false,
-          msg: `Not enough ${sym} for market order. You have ${holdingQty}.`,
-        });
-      }
-    }
-  } else {
-    if (side === "bid") {
-      if (Number(userData.cash) < price * quantity) {
-        return c.json({
-          ok: false,
-          msg: `Not enough cash.`,
-        });
-      }
-    } else {
-      if (holdingQty < quantity) {
-        return c.json({
-          ok: false,
-          msg: `Not enough ${sym}. You have ${holdingQty}.`,
-        });
-      }
-    }
+  const jwt = c.get("jwt");
+  const userData = await getUserByEmail(jwt.email);
+  if (!userData) {
+    return c.json({ ok: false, msg: "User not found." }, 404);
   }
 
-  const remainingQty = await fillOrders(
+  const userId = userData.id;
+  const sym = symbol.toUpperCase();
+  const holdingQty = await getPortfolio(userId, sym);
+  const cash = await getCash(userId);
+  const orderId = newOrderId(userId);
+
+  if (market) {
+    const estimate = await estimateMarketCost(side, sym, quantity);
+    if (!estimate.ok) {
+      return c.json({ ok: false, msg: estimate.msg });
+    }
+    if (side === "bid") {
+      if (cash < (estimate.cost ?? 0)) {
+        return c.json({
+          ok: false,
+          msg: `Not enough cash for market order on ${sym}. Need $${(estimate.cost ?? 0).toFixed(2)}.`,
+        });
+      }
+    } else if (holdingQty < quantity) {
+      return c.json({
+        ok: false,
+        msg: `Not enough ${sym} for market order. You have ${holdingQty}.`,
+      });
+    }
+  } else if (side === "bid") {
+    if (cash < price * quantity) {
+      return c.json({ ok: false, msg: "Not enough cash." });
+    }
+  } else if (holdingQty < quantity) {
+    return c.json({
+      ok: false,
+      msg: `Not enough ${sym}. You have ${holdingQty}.`,
+    });
+  }
+
+  const { remainingQty, fills } = await fillOrders(
     side,
     sym,
     price,
@@ -186,24 +175,54 @@ router.post("/makeorder", auth, async (c) => {
     userId,
     market,
   );
+  const filledQty = quantity - remainingQty;
+
+  // Fully filled as taker — no rest, no reservation left
   if (remainingQty === 0) {
-    sendOrderbook(sym);
+    await recordOrder({
+      orderId,
+      userId,
+      symbol: sym,
+      side,
+      price: market ? (fills[0]?.price ?? 0) : price,
+      quantity,
+      filledQuantity: filledQty,
+      status: "filled",
+      market,
+    });
+    await publishOrderbook(sym);
     return c.json({
       ok: true,
       msg: `All quantity of ${quantity} filled on ${sym}.`,
+      orderId,
     });
   }
 
+  // Market orders never rest
   if (market) {
-    sendOrderbook(sym);
+    await recordOrder({
+      orderId,
+      userId,
+      symbol: sym,
+      side,
+      price: fills[0]?.price ?? 0,
+      quantity,
+      filledQuantity: filledQty,
+      status: filledQty > 0 ? "partial" : "cancelled",
+      market: true,
+    });
+    await publishOrderbook(sym);
     return c.json({
-      ok: false,
-      msg: `Market order partially filled. ${quantity - remainingQty} filled.`,
+      ok: true,
+      msg: `Market order partially filled. ${filledQty} of ${quantity} filled on ${sym}.`,
+      orderId,
     });
   }
 
-  const orderId = `${Date.now()}-${userId}-${Math.random().toString(36).substr(2, 9)}`;
-  const order = {
+  // Rest remaining on book — reserve cash/stock for the unfilled qty
+  await reserveForOrder(userId, side, sym, price, remainingQty);
+
+  const order: Order = {
     orderId,
     userId,
     symbol: sym,
@@ -211,128 +230,27 @@ router.post("/makeorder", auth, async (c) => {
     quantity: remainingQty,
     timestamp: Date.now(),
   };
-  await insertSorted(key, order);
+  await insertSorted(bookKey(sym, side), order);
 
-  sendOrderbook(sym);
+  await recordOrder({
+    orderId,
+    userId,
+    symbol: sym,
+    side,
+    price,
+    quantity,
+    filledQuantity: filledQty,
+    status: "open",
+    market: false,
+  });
+
+  await publishOrderbook(sym);
   return c.json({
     ok: true,
-    msg: `${quantity - remainingQty} filled. ${remainingQty} placed in orderbook.`,
+    msg: `${filledQty} filled. ${remainingQty} placed in orderbook.`,
+    orderId,
   });
 });
-
-async function fillOrders(
-  side: string,
-  symbol: string,
-  price: number,
-  quantity: number,
-  userId: number,
-  market: boolean = false,
-): Promise<number> {
-  const key = symbolKey(symbol, side);
-  let remainingQty = quantity;
-
-  const orders = (await redisClient.lRange(key, 0, -1)).map((o: string) =>
-    JSON.parse(o),
-  );
-
-  if (side === "bid") {
-    // Sort asks by price asc, then timestamp asc (FIFO)
-    orders.sort((a: any, b: any) =>
-      a.price !== b.price ? a.price - b.price : a.timestamp - b.timestamp,
-    );
-  } else {
-    // Sort bids by price desc, then timestamp asc (FIFO)
-    orders.sort((a: any, b: any) =>
-      a.price !== b.price ? b.price - a.price : a.timestamp - b.timestamp,
-    );
-  }
-
-  const result: any[] = [];
-  for (const ord of orders) {
-    if (remainingQty <= 0) {
-      result.push(ord);
-      continue;
-    }
-    if (ord.userId === userId) {
-      result.push(ord);
-      continue;
-    }
-
-    const shouldMatch = market
-      ? true
-      : side === "bid"
-        ? ord.price <= price
-        : ord.price >= price;
-
-    if (!shouldMatch) {
-      result.push(ord);
-      continue;
-    }
-
-    if (ord.quantity > remainingQty) {
-      if (side === "bid") {
-        flipBalance(symbol, ord.userId, userId, remainingQty, ord.price);
-      } else {
-        flipBalance(symbol, userId, ord.userId, remainingQty, ord.price);
-      }
-      ord.quantity -= remainingQty;
-      result.push(ord);
-      remainingQty = 0;
-    } else {
-      if (side === "bid") {
-        flipBalance(symbol, ord.userId, userId, ord.quantity, ord.price);
-      } else {
-        flipBalance(symbol, userId, ord.userId, ord.quantity, ord.price);
-      }
-      remainingQty -= ord.quantity;
-    }
-  }
-
-  await rebuildList(key, result);
-  return remainingQty;
-}
-
-async function flipBalance(
-  symbol: string,
-  userId1: number,
-  userId2: number,
-  quantity: number,
-  price: number,
-) {
-  // User1: seller — decrease portfolio, increase cash
-  await updatePortfolio(userId1, symbol, -quantity);
-  await db
-    .update(users)
-    .set({
-      cash: sql`${users.cash} + ${quantity * price}`,
-      stock: sql`GREATEST(${users.stock} - ${quantity}, 0)`,
-    })
-    .where(eq(users.id, userId1));
-  await db.insert(transactions).values({
-    user_id: userId1,
-    symbol,
-    type: "sell",
-    quantity: quantity.toString(),
-    price: price.toString(),
-  });
-
-  // User2: buyer — increase portfolio, decrease cash
-  await updatePortfolio(userId2, symbol, quantity);
-  await db
-    .update(users)
-    .set({
-      cash: sql`${users.cash} - ${quantity * price}`,
-      stock: sql`${users.stock} + ${quantity}`,
-    })
-    .where(eq(users.id, userId2));
-  await db.insert(transactions).values({
-    user_id: userId2,
-    symbol,
-    type: "buy",
-    quantity: quantity.toString(),
-    price: price.toString(),
-  });
-}
 
 router.get("/chart", async (c) => {
   const symbol = (c.req.query("symbol") || "TNV").toUpperCase();
@@ -360,22 +278,9 @@ router.get("/chart", async (c) => {
 router.get("/depth", async (c) => {
   const symbol = (c.req.query("symbol") || "TNV").toUpperCase();
   try {
-    const asks = await redisClient.lRange(`asks:${symbol}`, 0, -1);
-    const bids = await redisClient.lRange(`bids:${symbol}`, 0, -1);
-    return c.json({
-      ok: true,
-      data: {
-        asks: asks.map((a) => {
-          const parsed = JSON.parse(a);
-          return { price: parsed.price, quantity: parsed.quantity };
-        }),
-        bids: bids.map((b) => {
-          const parsed = JSON.parse(b);
-          return { price: parsed.price, quantity: parsed.quantity };
-        }),
-      },
-    });
-  } catch (err) {
+    const data = await parseOrderbook(symbol);
+    return c.json({ ok: true, data });
+  } catch {
     return c.json(
       { ok: false, error: "Failed to fetch orderbook from Redis" },
       500,
@@ -384,32 +289,32 @@ router.get("/depth", async (c) => {
 });
 
 router.get("/myorders", auth, async (c) => {
-  const jwt = (c as any).jwt;
+  const jwt = c.get("jwt");
   const symbol = (c.req.query("symbol") || "TNV").toUpperCase();
-  const userRow = await db
-    .select()
-    .from(users)
-    .where(eq(users.email, jwt.email));
-  const userId = userRow[0].id;
+  const user = await getUserByEmail(jwt.email);
+  const userId = user?.id;
+  if (!userId) {
+    return c.json({ ok: false, error: "User not found" }, 404);
+  }
 
   try {
     const asks = (await redisClient.lRange(`asks:${symbol}`, 0, -1))
-      .map((a) => JSON.parse(a))
-      .filter((a: any) => a.userId === userId);
+      .map((a) => JSON.parse(a) as Order)
+      .filter((a) => a.userId === userId);
     const bids = (await redisClient.lRange(`bids:${symbol}`, 0, -1))
-      .map((b) => JSON.parse(b))
-      .filter((b: any) => b.userId === userId);
+      .map((b) => JSON.parse(b) as Order)
+      .filter((b) => b.userId === userId);
 
     return c.json({
       ok: true,
       data: {
-        asks: asks.map((a: any) => ({
+        asks: asks.map((a) => ({
           orderId: a.orderId,
           price: a.price,
           quantity: a.quantity,
           symbol: a.symbol,
         })),
-        bids: bids.map((b: any) => ({
+        bids: bids.map((b) => ({
           orderId: b.orderId,
           price: b.price,
           quantity: b.quantity,
@@ -417,30 +322,108 @@ router.get("/myorders", auth, async (c) => {
         })),
       },
     });
-  } catch (err) {
+  } catch {
     return c.json({ ok: false, error: "Failed to fetch orders" }, 500);
   }
 });
 
+/** Closed / terminal order history (filled, cancelled, partial). */
+router.get("/order-history", auth, async (c) => {
+  const jwt = c.get("jwt");
+  const user = await getUserByEmail(jwt.email);
+  const userId = user?.id;
+  if (!userId) {
+    return c.json({ ok: false, error: "User not found" }, 404);
+  }
+
+  const page = Math.max(1, Number(c.req.query("page") || 1));
+  const limit = Math.min(100, Math.max(1, Number(c.req.query("limit") || 20)));
+  const offset = (page - 1) * limit;
+  const symbol = c.req.query("symbol")?.toUpperCase();
+
+  const conditions = [
+    eq(ordersTable.userId, userId),
+    ne(ordersTable.status, "open"),
+  ];
+  if (symbol) {
+    conditions.push(eq(ordersTable.symbol, symbol));
+  }
+  const where = and(...conditions);
+
+  const [totalRow] = await db
+    .select({ total: count() })
+    .from(ordersTable)
+    .where(where);
+
+  const total = Number(totalRow?.total ?? 0);
+  const totalPages = Math.max(1, Math.ceil(total / limit));
+
+  const rows = await db
+    .select()
+    .from(ordersTable)
+    .where(where)
+    .orderBy(desc(ordersTable.updatedAt), desc(ordersTable.id))
+    .limit(limit)
+    .offset(offset);
+
+  return c.json({
+    ok: true,
+    data: rows.map((r) => ({
+      orderId: r.orderId,
+      symbol: r.symbol,
+      side: r.side,
+      price: Number(r.price),
+      quantity: r.quantity,
+      filledQuantity: r.filledQuantity,
+      status: r.status,
+      market: r.market,
+      createdAt: r.createdAt,
+      updatedAt: r.updatedAt,
+    })),
+    page,
+    limit,
+    total,
+    totalPages,
+  });
+});
+
 router.post("/cancelorder", auth, async (c) => {
   const { orderId, side, symbol } = await c.req.json();
-  const jwt = (c as any).jwt;
-  const userRow = await db
-    .select()
-    .from(users)
-    .where(eq(users.email, jwt.email));
-  const userId = userRow[0].id;
+  const jwt = c.get("jwt");
+  const user = await getUserByEmail(jwt.email);
+  const userId = user?.id;
+  if (!userId) {
+    return c.json({ ok: false, msg: "User not found." }, 404);
+  }
+
+  if (side !== "bid" && side !== "ask") {
+    return c.json({ ok: false, msg: "Invalid side." }, 400);
+  }
+
   const sym = (symbol || "TNV").toUpperCase();
 
   try {
-    const key = symbolKey(sym, side);
-    const orders = await redisClient.lRange(key, 0, -1);
+    const key = bookKey(sym, side);
+    const bookOrders = await redisClient.lRange(key, 0, -1);
 
-    for (const order of orders) {
-      const parsed = JSON.parse(order);
+    for (const raw of bookOrders) {
+      const parsed = JSON.parse(raw) as Order;
       if (parsed.orderId === orderId && parsed.userId === userId) {
-        await redisClient.lRem(key, 1, order);
-        sendOrderbook(sym);
+        await redisClient.lRem(key, 1, raw);
+        // Return reserved cash/stock for remaining qty
+        await releaseReservation(
+          userId,
+          side,
+          sym,
+          parsed.price,
+          parsed.quantity,
+        );
+        await markOrderStatus(
+          orderId,
+          parsed.quantity > 0 ? "cancelled" : "filled",
+        );
+        // If partially filled before cancel, status cancelled still correct
+        await publishOrderbook(sym);
         return c.json({
           ok: true,
           msg: "Order cancelled successfully.",
@@ -452,7 +435,7 @@ router.post("/cancelorder", auth, async (c) => {
       ok: false,
       msg: "Order not found or you don't have permission.",
     });
-  } catch (err) {
+  } catch {
     return c.json({ ok: false, error: "Failed to cancel order" }, 500);
   }
 });

@@ -4,22 +4,15 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Loader2, RefreshCcw, X } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import { toast } from "sonner";
-import { useState } from "react";
-
-type Order = {
-  orderId: string;
-  price: number;
-  quantity: number;
-  symbol: string;
-};
+import type { UserOrder } from "@/types";
 
 type OrdersResponse = {
   ok: boolean;
   data?: {
-    asks: Order[];
-    bids: Order[];
+    asks: UserOrder[];
+    bids: UserOrder[];
   };
 };
 
@@ -29,10 +22,13 @@ type CancelOrderResponse = {
   error?: string;
 };
 
-export default function Orders() {
-  const [symbol, setSymbol] = useState("TNV");
+interface Props {
+  symbol: string;
+}
+
+export default function Orders({ symbol }: Props) {
   const queryClient = useQueryClient();
-  const { data, isLoading, refetch } = useQuery<OrdersResponse>({
+  const { data, isLoading, refetch, isFetching } = useQuery<OrdersResponse>({
     queryKey: ["myorders", symbol],
     queryFn: async () =>
       await api<OrdersResponse>(`/trade/myorders?symbol=${symbol}`),
@@ -45,22 +41,30 @@ export default function Orders() {
       orderId,
       side,
       symbol: sym,
-    }: { orderId: string; side: string; symbol: string }) =>
+    }: {
+      orderId: string;
+      side: string;
+      symbol: string;
+    }) =>
       await api<CancelOrderResponse>("/trade/cancelorder", {
         method: "POST",
         body: JSON.stringify({ orderId, side, symbol: sym }),
       }),
-    onSuccess: (data) => {
-      if (data.ok) {
+    onSuccess: (res) => {
+      if (res.ok) {
         toast.success("Order cancelled successfully!");
-        queryClient.invalidateQueries({ queryKey: ["myorders"] });
-        queryClient.invalidateQueries({ queryKey: ["depth"] });
+        void queryClient.invalidateQueries({ queryKey: ["myorders"] });
+        void queryClient.invalidateQueries({ queryKey: ["depth"] });
+        void queryClient.invalidateQueries({ queryKey: ["order-history"] });
+        void queryClient.invalidateQueries({ queryKey: ["user_info"] });
       } else {
-        toast.info(data.msg);
+        toast.info(res.msg);
       }
     },
-    onError: () => {
-      toast.error("Failed to cancel order.");
+    onError: (err) => {
+      toast.error(
+        err instanceof ApiError ? err.message : "Failed to cancel order.",
+      );
     },
   });
 
@@ -88,27 +92,15 @@ export default function Orders() {
     <Card className="shadow-md border-0 w-full">
       <CardHeader>
         <CardTitle className="text-lg font-semibold flex items-center justify-between">
-          Active Orders
-          <div className="flex items-center gap-2">
-            <select
-              value={symbol}
-              onChange={(e) => setSymbol(e.target.value)}
-              className="bg-transparent border border-border rounded px-2 py-1 text-xs font-mono"
-            >
-              <option value="TNV">TNV</option>
-              <option value="AAPL">AAPL</option>
-              <option value="GOOGL">GOOGL</option>
-              <option value="MSFT">MSFT</option>
-              <option value="TSLA">TSLA</option>
-            </select>
-            <Button
-              onClick={() => refetch()}
-              variant="ghost"
-              size="icon"
-              disabled={isLoading}>
-              <RefreshCcw className={isLoading ? "animate-spin" : ""} />
-            </Button>
-          </div>
+          Active Orders — {symbol}
+          <Button
+            onClick={() => refetch()}
+            variant="ghost"
+            size="icon"
+            disabled={isFetching}
+          >
+            <RefreshCcw className={isFetching ? "animate-spin" : ""} />
+          </Button>
         </CardTitle>
       </CardHeader>
       <CardContent>
@@ -119,7 +111,8 @@ export default function Orders() {
             {orders?.bids.map((order) => (
               <div
                 key={order.orderId}
-                className="bg-green-50 dark:bg-green-950/20 border border-green-200 dark:border-green-800 rounded-lg p-3">
+                className="bg-green-50 dark:bg-green-950/20 border border-green-200 dark:border-green-800 rounded-lg p-3"
+              >
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-xs font-medium text-green-700 dark:text-green-400 bg-green-100 dark:bg-green-900 px-2 py-0.5 rounded">
                     BUY
@@ -134,7 +127,8 @@ export default function Orders() {
                     }
                     variant="outline"
                     size="sm"
-                    disabled={cancelOrder.isPending}>
+                    disabled={cancelOrder.isPending}
+                  >
                     <X className="w-4 h-4" /> Close Order
                   </Button>
                 </div>
@@ -151,7 +145,8 @@ export default function Orders() {
             {orders?.asks.map((order) => (
               <div
                 key={order.orderId}
-                className="bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-800 rounded-lg p-3">
+                className="bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-800 rounded-lg p-3"
+              >
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-xs font-medium text-red-700 dark:text-red-400 bg-red-100 dark:bg-red-900 px-2 py-0.5 rounded">
                     SELL
@@ -166,7 +161,8 @@ export default function Orders() {
                     }
                     variant="outline"
                     size="sm"
-                    disabled={cancelOrder.isPending}>
+                    disabled={cancelOrder.isPending}
+                  >
                     <X className="w-4 h-4" /> Close Order
                   </Button>
                 </div>
